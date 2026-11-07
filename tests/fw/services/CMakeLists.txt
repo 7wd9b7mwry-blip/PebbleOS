@@ -515,3 +515,8 @@ pbl_clar_test(test_habit_vibes
     fw/services/habit/vibe_program.c
     fw/services/habit/habit_policy.c
 )
+
+pbl_clar_test(test_sound_level
+  SOURCES
+    fw/services/habit/sound_level.c
+)

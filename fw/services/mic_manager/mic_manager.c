@@ -37,7 +37,14 @@ void mic_manager_init(void) {
 }
 
 static bool prv_is_app(MicClient client) {
-  return (client != MicClientNone) && (client != MicClientVoiceDictation);
+  return (client != MicClientNone) && (client != MicClientVoiceDictation) &&
+         (client != MicClientSoundLevel);
+}
+
+//! The owner gives way to `client`: dictation preempts everyone, everyone preempts sound level.
+static bool prv_preempts(MicClient client, MicClient owner) {
+  return (client == MicClientVoiceDictation) ||
+         ((owner == MicClientSoundLevel) && (client != MicClientSoundLevel));
 }
 
 // The banner is UI, so it follows the owner from KernelMain whichever task changed it.
@@ -113,16 +120,17 @@ bool mic_manager_acquire(MicClient client, MicDataHandlerCB handler, void *conte
     return rv;
   }
 
-  if (client != MicClientVoiceDictation) {
-    // Apps never preempt anyone
+  if (!prv_preempts(client, s_state.owner) ||
+      (held_for_other && (client != MicClientVoiceDictation))) {
+    // Apps never preempt anyone but the sound level client
     PBL_LOG_DBG("Mic busy (owner %u, reserved %u), refusing client %u", s_state.owner,
                 s_state.reserved, client);
     prv_unlock();
     return false;
   }
 
-  // Dictation takes the mic away from the app
-  PBL_LOG_DBG("Dictation preempting mic owner %u", s_state.owner);
+  // Dictation takes the mic away from the app (and anyone from the sound level client)
+  PBL_LOG_DBG("Client %u preempting mic owner %u", client, s_state.owner);
   const MicManagerPreemptedCb preempted_cb = s_state.on_preempted;
   void *preempted_ctx = s_state.preempt_context;
   mic_source_stop();
@@ -150,7 +158,8 @@ bool mic_manager_reserve(MicClient client) {
   }
   pbl_mutex_lock(&s_lock, PBL_FOREVER);
   const bool rv = !s_state.preempting && !s_state.dictation_active &&
-                  (s_state.owner == MicClientNone) && (s_state.reserved == MicClientNone);
+                  ((s_state.owner == MicClientNone) || (s_state.owner == MicClientSoundLevel)) &&
+                  (s_state.reserved == MicClientNone);
   if (rv) {
     s_state.reserved = client;
   }
@@ -188,8 +197,8 @@ MicClient mic_manager_get_owner(void) {
 
 bool mic_manager_is_busy(void) {
   pbl_mutex_lock(&s_lock, PBL_FOREVER);
-  const bool busy = (s_state.owner != MicClientNone) || (s_state.reserved != MicClientNone) ||
-                    s_state.dictation_active;
+  const bool busy = ((s_state.owner != MicClientNone) && (s_state.owner != MicClientSoundLevel)) ||
+                    (s_state.reserved != MicClientNone) || s_state.dictation_active;
   prv_unlock();
   return busy;
 }

@@ -28,6 +28,7 @@ typedef enum {
   HabitLogKind_SmartVibe = 4,     //!< a: program, e: budget ms
   HabitLogKind_Minute = 5,        //!< a: bpm, b: RMSSD ms, c: motion mG, d: lux, e: sleep state
   HabitLogKind_Label = 6,         //!< a: label (wearer marked an episode / false alarm)
+  HabitLogKind_Sound = 7,         //!< b: RMS, c: peak (tenths of dBFS + 1000), e: samples
 } HabitLogKind;
 
 //! One logged record, 16 bytes
@@ -62,6 +63,8 @@ void habit_service_set_alerts_while_asleep(bool on);
 //! Presence beacon: while connected to the phone, advertise a BTHome beacon (battery) every
 //! second, so room sensors (ESPHome Bluetooth proxies, Home Assistant) can locate the watch.
 void habit_service_set_beacon(bool on);
+//! Sound level: one second a minute from the microphone, as a level only (no audio is kept).
+void habit_service_set_sound(bool on);
 //! Forget the calibrated regions (back to the generic "hand at the head" default).
 void habit_service_reset_calibration(void);
 
@@ -80,6 +83,9 @@ typedef struct {
   uint8_t regions_calibrated;  //!< bit per HabitRegion
   bool beacon;
   bool beacon_airing;
+  bool sound;
+  int16_t sound_rms_db10;   //!< last minute's RMS level, tenths of dBFS
+  int16_t sound_peak_db10;
 } HabitServiceStatus;
 
 void habit_service_get_status(HabitServiceStatus *status);

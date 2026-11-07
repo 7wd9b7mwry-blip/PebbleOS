@@ -15,6 +15,10 @@
 //! app owns the mic preempts the app, which is told through its preempted callback before the mic
 //! is restarted. An app cannot acquire the mic while dictation owns it. The OS mic banner is shown
 //! while an app client owns the running mic.
+//!
+//! The sound-level client (a kernel background service measuring loudness, never keeping audio)
+//! has the lowest priority: any other client preempts it, it never reserves, it does not count as
+//! busy and it shows no banner.
 
 //! Sample rate of the frames clients receive, in Hz.
 #define MIC_MANAGER_SAMPLE_RATE 16000
@@ -33,6 +37,7 @@ typedef enum MicClient {
   MicClientVoiceDictation,
   MicClientAppStream,
   MicClientAppCapture,
+  MicClientSoundLevel,
 } MicClient;
 
 typedef enum MicManagerAppCheck {

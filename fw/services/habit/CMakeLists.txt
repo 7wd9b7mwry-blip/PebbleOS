@@ -5,6 +5,7 @@ pbl_library()
 pbl_library_sources(
   habit_detect.c
   habit_policy.c
+  sound_level.c
   vibe_program.c
   service.c
   shell.c

@@ -269,3 +269,66 @@ void test_mic_manager__dictation_session_holds_off_apps(void) {
   cl_assert(prv_acquire_app());
   mic_manager_release(MicClientAppStream);
 }
+
+// Sound level client
+////////////////////////////////////////////////////////////////
+
+static int16_t s_level_buffer[320];
+static int s_level_preempted;
+
+static void prv_level_handler(int16_t *samples, size_t sample_count, void *context) {
+}
+
+static void prv_level_preempted(void *context) {
+  s_level_preempted++;
+}
+
+static bool prv_acquire_level(void) {
+  return mic_manager_acquire(MicClientSoundLevel, prv_level_handler, nullptr, s_level_buffer, 320,
+                             prv_level_preempted, nullptr);
+}
+
+void test_mic_manager__sound_level_is_quiet_and_low_priority(void) {
+  s_level_preempted = 0;
+  cl_assert(prv_acquire_level());
+  cl_assert_equal_i(mic_manager_get_owner(), MicClientSoundLevel);
+  // no banner, not busy
+  cl_assert(!s_banner_visible);
+  cl_assert(!mic_manager_is_busy());
+  // an app can reserve and take the mic from it
+  cl_assert(mic_manager_reserve(MicClientAppStream));
+  cl_assert(prv_acquire_app());
+  cl_assert_equal_i(s_level_preempted, 1);
+  cl_assert_equal_i(mic_manager_get_owner(), MicClientAppStream);
+  cl_assert(s_buffer == s_app_buffer);
+  // and sound level cannot take it back
+  cl_assert(!prv_acquire_level());
+  cl_assert_equal_i(mic_manager_get_owner(), MicClientAppStream);
+  mic_manager_release(MicClientAppStream);
+  cl_assert(!s_mic_running);
+}
+
+void test_mic_manager__dictation_preempts_sound_level(void) {
+  s_level_preempted = 0;
+  cl_assert(prv_acquire_level());
+  mic_manager_set_dictation_active(true);
+  cl_assert(prv_acquire_dictation());
+  cl_assert_equal_i(s_level_preempted, 1);
+  cl_assert_equal_i(mic_manager_get_owner(), MicClientVoiceDictation);
+  cl_assert(!prv_acquire_level());
+  mic_manager_release(MicClientVoiceDictation);
+  // still refused while the dictation session lasts
+  cl_assert(!prv_acquire_level());
+  mic_manager_set_dictation_active(false);
+  cl_assert(prv_acquire_level());
+  mic_manager_release(MicClientSoundLevel);
+  cl_assert(!s_mic_running);
+}
+
+void test_mic_manager__sound_level_waits_for_reservations(void) {
+  cl_assert(mic_manager_reserve(MicClientAppCapture));
+  cl_assert(!prv_acquire_level());
+  mic_manager_release(MicClientAppCapture);
+  cl_assert(prv_acquire_level());
+  mic_manager_release(MicClientSoundLevel);
+}

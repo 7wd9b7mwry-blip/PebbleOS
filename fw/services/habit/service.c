@@ -14,6 +14,10 @@
 #include <pbl/services/battery/battery_state.h>
 #include <pbl/services/data_logging/data_logging_service.h>
 #include <pbl/services/habit/habit_policy.h>
+#include <pbl/services/habit/sound_level.h>
+#ifdef CONFIG_SERVICE_MIC_MANAGER
+#include <pbl/services/mic_manager.h>
+#endif
 #include <pbl/services/hrm/hrm_manager.h>
 #include <pbl/services/hrm/hrm_manager_private.h>
 #include <pbl/services/light.h>
@@ -45,6 +49,8 @@ PBL_LOG_MODULE_DEFINE(service_habit, CONFIG_SERVICE_HABIT_LOG_LEVEL);
 #define BASELINE_SAVE_MIN 60    // learned baselines are saved hourly
 #define BEACON_INTERVAL_MS 1000
 #define BEACON_REFRESH_MIN 10   // battery level refresh; also re-arms after a Bluetooth restart
+#define SOUND_FRAME_SAMPLES 320   // 20 ms at 16 kHz
+#define SOUND_FRAMES 50           // one second a minute
 #define GYRO_BUF 64             // > 2 s at 26 Hz
 #define GYRO_OFF_AFTER_MS 10000 // hand away from the head this long: gyro off again
 
@@ -83,6 +89,13 @@ static struct {
   bool settings_loaded;
   bool beacon;
   uint8_t beacon_minutes;
+  // sound level
+  bool sound;
+  bool sound_capturing;
+  bool sound_done_posted;
+  uint8_t sound_frames;
+  SoundLevelAcc sound_acc;
+  int16_t sound_rms_db10, sound_peak_db10;
   uint8_t regions_calibrated;
   uint16_t minutes_since_save;
 } s;
@@ -106,6 +119,7 @@ static const char KEY_VIBRATE[] = "vibrate";
 static const char KEY_SLEEP_ALERTS[] = "sleep_alerts";
 static const char KEY_BASELINES[] = "baselines";
 static const char KEY_BEACON[] = "beacon";
+static const char KEY_SOUND[] = "sound";
 
 static bool prv_settings_get(const char *key, void *val, size_t len) {
   struct pbl_settings_file file;
@@ -169,6 +183,9 @@ static void prv_load_settings(void) {
   }
   if (prv_settings_get(KEY_BEACON, &v, 1)) {
     s.beacon = v != 0;
+  }
+  if (prv_settings_get(KEY_SOUND, &v, 1)) {
+    s.sound = v != 0;
   }
   BaselinesRecord b;
   if (prv_settings_get(KEY_BASELINES, &b, sizeof(b)) && b.version == SETTINGS_VERSION) {
@@ -239,6 +256,66 @@ static void prv_log(HabitLogKind kind, uint8_t a, uint16_t b, uint16_t c, uint16
       .utc = (uint32_t)pbl_realtime(), .kind = kind, .a = a, .b = b, .c = c, .d = d, .e = e};
   dls_log(s.dls, &r, 1);
 }
+
+// ---- sound level ------------------------------------------------------------------------------
+
+#ifdef CONFIG_SERVICE_MIC_MANAGER
+static int16_t s_mic_buf[SOUND_FRAME_SAMPLES];
+
+static void prv_sound_done_kbg(void *unused) {
+  mic_manager_release(MicClientSoundLevel);
+  if (!s.sound_capturing) {
+    return;  // preempted: no level this minute
+  }
+  s.sound_capturing = false;
+  s.sound_rms_db10 = sound_level_rms_db10(&s.sound_acc);
+  s.sound_peak_db10 = sound_level_peak_db10(&s.sound_acc);
+  prv_log(HabitLogKind_Sound, 0, (uint16_t)(s.sound_rms_db10 + 1000),
+          (uint16_t)(s.sound_peak_db10 + 1000), 0, s.sound_acc.n);
+}
+
+// on KernelBG, like the rest of the service
+static void prv_sound_frame(int16_t *samples, size_t count, void *context) {
+  if (!s.sound_capturing || s.sound_done_posted) {
+    return;
+  }
+  sound_level_add(&s.sound_acc, samples, count);
+  if (++s.sound_frames >= SOUND_FRAMES) {
+    s.sound_done_posted = true;
+    system_task_add_callback(prv_sound_done_kbg, nullptr);
+  }
+}
+
+static void prv_sound_preempted(void *context) {
+  s.sound_capturing = false;  // an app or dictation took the mic
+}
+
+static void prv_sound_start(void) {
+  if (s.sound_capturing) {  // last minute's never finished
+    mic_manager_release(MicClientSoundLevel);
+    s.sound_capturing = false;
+  }
+  if (!s.sound) {
+    return;
+  }
+  sound_level_reset(&s.sound_acc);
+  s.sound_frames = 0;
+  s.sound_done_posted = false;
+  s.sound_capturing = true;
+  if (!mic_manager_acquire(MicClientSoundLevel, prv_sound_frame, nullptr, s_mic_buf,
+                           SOUND_FRAME_SAMPLES, prv_sound_preempted, nullptr)) {
+    s.sound_capturing = false;  // the mic is in use
+  }
+}
+
+static void prv_sound_stop(void) {
+  mic_manager_release(MicClientSoundLevel);
+  s.sound_capturing = false;
+}
+#else
+static void prv_sound_start(void) {}
+static void prv_sound_stop(void) {}
+#endif
 
 // ---- presence beacon ----------------------------------------------------------------------------
 
@@ -443,6 +520,7 @@ static void prv_minute_kbg(void *unused) {
   if (++s.beacon_minutes >= BEACON_REFRESH_MIN) {
     prv_beacon_update();
   }
+  prv_sound_start();
 }
 
 static void prv_minute_cb(struct pbl_cron_job *job, void *data) {
@@ -487,6 +565,7 @@ static void prv_stop_kbg(void *unused) {
   prv_stop();
   pbl_cron_job_unschedule(&s_minute_job);
   prv_save_baselines();
+  prv_sound_stop();
   if (s.hrm != HRM_INVALID_SESSION_REF) {
     sys_hrm_manager_unsubscribe(s.hrm);
     s.hrm = HRM_INVALID_SESSION_REF;
@@ -521,6 +600,8 @@ void habit_service_init(void) {
   s.refill_timer = new_timer_create();
   s.hrm = HRM_INVALID_SESSION_REF;
   s.beacon = true;
+  s.sound = true;
+  s.sound_rms_db10 = s.sound_peak_db10 = SOUND_LEVEL_FLOOR_DB10;
 }
 
 void habit_service_set_enabled(bool enabled) {
@@ -617,6 +698,20 @@ void habit_service_set_beacon(bool on) {
   system_task_add_callback(prv_set_beacon_kbg, (void *)(uintptr_t)on);
 }
 
+static void prv_set_sound_kbg(void *on) {
+  prv_load_settings();
+  s.sound = on != NULL;
+  const uint8_t v = on ? 1 : 0;
+  prv_settings_set(KEY_SOUND, &v, 1);
+  if (!s.sound) {
+    prv_sound_stop();
+  }
+}
+
+void habit_service_set_sound(bool on) {
+  system_task_add_callback(prv_set_sound_kbg, (void *)(uintptr_t)on);
+}
+
 void habit_service_calibrate(HabitRegion region) {
   system_task_add_callback(prv_calibrate_kbg, (void *)(uintptr_t)region);
 }
@@ -645,4 +740,7 @@ void habit_service_get_status(HabitServiceStatus *st) {
   st->regions_calibrated = s.regions_calibrated;
   st->beacon = s.beacon;
   st->beacon_airing = gap_le_advert_is_beacon_airing();
+  st->sound = s.sound;
+  st->sound_rms_db10 = s.sound_rms_db10;
+  st->sound_peak_db10 = s.sound_peak_db10;
 }
