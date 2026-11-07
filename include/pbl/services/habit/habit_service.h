@@ -20,6 +20,8 @@
 
 //! Data logging tag of the habit records (outside the range of the system tags, 78-87)
 #define DlsSystemTagHabit 120
+//! Data logging tag of the classifier windows near the head (HabitWindowRecord)
+#define DlsSystemTagHabitWindow 121
 
 typedef enum {
   HabitLogKind_EpisodeStart = 1,  //!< a: region, b: confidence, e: dwell ms
@@ -41,6 +43,18 @@ typedef struct PBL_PACKED {
   uint16_t d;
   uint32_t e;
 } HabitLogRecord;
+
+//! One scored classifier window, 76 bytes: for training a personal model from the wearer's own
+//! labelled episodes (labels are HabitLogKind_Label records of the other session)
+typedef struct PBL_PACKED {
+  uint32_t utc;
+  uint8_t region;      //!< HabitRegion the hand was at
+  uint8_t state;       //!< 0 idle, 1 candidate, 2 in an episode
+  uint8_t gyro;        //!< the gyroscope ran
+  uint8_t reserved;
+  int32_t score;       //!< classifier score, logit x 1024
+  int32_t features[16];
+} HabitWindowRecord;
 
 void habit_service_init(void);
 

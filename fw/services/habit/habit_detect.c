@@ -2,6 +2,8 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 
 #include <pbl/services/habit/habit_detect.h>
+#include <pbl/services/habit/habit_features.h>
+#include <pbl/services/habit/habit_model.h>
 
 #include <stddef.h>
 #include <stdlib.h>
@@ -115,6 +117,58 @@ static uint8_t prv_confidence(const HabitDetector *d, HabitRegion r, int32_t cos
   return (uint8_t)((orient * 60 + motion * 40) / 100);
 }
 
+_Static_assert(HabitFeatCount == 16, "habit_detect keeps 16 features");
+_Static_assert(HABIT_DETECT_WINDOW == HABIT_FEAT_WINDOW, "window length");
+
+static void prv_window_push(HabitDetector *d, const HabitVec *accel) {
+  d->win_acc[d->win_head] = *accel;
+  d->win_gyro[d->win_head] = d->last_gyro;
+  d->win_head = (uint8_t)((d->win_head + 1) % HABIT_DETECT_WINDOW);
+  if (d->win_count < HABIT_DETECT_WINDOW) {
+    d->win_count++;
+  }
+  d->since_score++;
+}
+
+//! Score the window every HABIT_FEAT_HOP samples while the hand is near the head
+static void prv_window_score(HabitDetector *d) {
+  if (d->win_count < HABIT_DETECT_WINDOW || d->since_score < HABIT_FEAT_HOP) {
+    return;
+  }
+  d->since_score = 0;
+  HabitVec acc[HABIT_DETECT_WINDOW], gyro[HABIT_DETECT_WINDOW];
+  for (int i = 0; i < HABIT_DETECT_WINDOW; i++) {
+    const int j = (d->win_head + i) % HABIT_DETECT_WINDOW;
+    acc[i] = d->win_acc[j];
+    gyro[i] = d->win_gyro[j];
+  }
+  habit_features_compute(acc, d->have_gyro ? gyro : NULL, HABIT_DETECT_WINDOW, d->features);
+  d->model_score = habit_model_score(d->features);
+  d->model_ok = d->model_score >= d->cfg.model_threshold;
+  d->scored = true;
+  d->features_fresh = true;
+}
+
+//! Whether the classifier lets an episode start (always, without a trained model)
+static bool prv_model_allows(const HabitDetector *d) {
+  if (!d->cfg.use_model || !habit_model_trained()) {
+    return true;
+  }
+  return d->scored && d->model_ok;
+}
+
+bool habit_detect_take_window(HabitDetector *d, int32_t features[16], int32_t *score) {
+  if (!d->features_fresh) {
+    return false;
+  }
+  d->features_fresh = false;
+  memcpy(features, d->features, sizeof(d->features));
+  if (score) {
+    *score = d->model_score;
+  }
+  return true;
+}
+
 static void prv_fill(const HabitDetector *d, uint32_t t_ms, HabitEpisode *out) {
   if (!out) {
     return;
@@ -141,6 +195,8 @@ void habit_detect_default_config(HabitConfig *cfg) {
   cfg->min_fine_gyro_dps10 = 150;  // 15 deg/s
   cfg->min_gravity_mg = 700;
   cfg->max_gravity_mg = 1300;
+  cfg->use_model = true;
+  cfg->model_threshold = g_habit_model.threshold;
 }
 
 void habit_detect_init(HabitDetector *d, const HabitConfig *cfg) {
@@ -173,6 +229,7 @@ HabitEvent habit_detect_feed(HabitDetector *d, uint32_t t_ms, const HabitVec *ac
     const int32_t decayed = d->gross - d->gross / prv_div(GROSS_DECAY_TAU_MS, hz);
     d->gross = dyn > decayed ? dyn : decayed;
     if (gyro) {
+      d->last_gyro = *gyro;
       const int32_t gmag = (abs(gyro->x) + abs(gyro->y) + abs(gyro->z)) * FX;
       d->gyro_fine = prv_lp(d->gyro_fine, gmag, prv_div(FINE_TAU_MS, hz));
       d->have_gyro = true;
@@ -181,6 +238,15 @@ HabitEvent habit_detect_feed(HabitDetector *d, uint32_t t_ms, const HabitVec *ac
 
   int32_t cos_x1000 = -1000;
   const HabitRegion r = prv_gravity_sane(d) ? prv_match(d, &cos_x1000) : HabitRegion_None;
+
+  if (!vibrating) {
+    prv_window_push(d, accel);
+  }
+  if (r != HabitRegion_None || d->state != HabitState_Idle) {
+    prv_window_score(d);
+  } else {
+    d->scored = false;
+  }
 
   switch (d->state) {
     case HabitState_Idle:
@@ -199,7 +265,7 @@ HabitEvent habit_detect_feed(HabitDetector *d, uint32_t t_ms, const HabitVec *ac
         d->last_match_ms = t_ms;
         d->confidence_sum += prv_confidence(d, r, cos_x1000);
         d->confidence_n++;
-        if (t_ms - d->region_since_ms >= d->cfg.min_dwell_ms) {
+        if (t_ms - d->region_since_ms >= d->cfg.min_dwell_ms && prv_model_allows(d)) {
           d->state = HabitState_Active;
           d->last_report_ms = t_ms;
           prv_fill(d, t_ms, out);
@@ -243,6 +309,7 @@ void habit_detect_feed_gyro(HabitDetector *d, const HabitVec *gyro, bool vibrati
   if (vibrating) {
     return;
   }
+  d->last_gyro = *gyro;
   const int32_t gmag = (abs(gyro->x) + abs(gyro->y) + abs(gyro->z)) * FX;
   d->gyro_fine = d->have_gyro ? prv_lp(d->gyro_fine, gmag, prv_div(FINE_TAU_MS, d->cfg.sample_hz))
                               : gmag;
@@ -252,6 +319,7 @@ void habit_detect_feed_gyro(HabitDetector *d, const HabitVec *gyro, bool vibrati
 void habit_detect_gyro_off(HabitDetector *d) {
   d->have_gyro = false;
   d->gyro_fine = 0;
+  d->last_gyro = (HabitVec){0, 0, 0};
 }
 
 bool habit_detect_wants_gyro(const HabitDetector *d) {

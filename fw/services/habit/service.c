@@ -13,6 +13,7 @@
 #include <pbl/services/activity/activity.h>
 #include <pbl/services/battery/battery_state.h>
 #include <pbl/services/data_logging/data_logging_service.h>
+#include <pbl/services/habit/habit_features.h>
 #include <pbl/services/habit/habit_policy.h>
 #include <pbl/services/habit/sound_level.h>
 #ifdef CONFIG_SERVICE_MIC_MANAGER
@@ -81,6 +82,7 @@ static struct {
   uint16_t ppi_n;
   HRMSessionRef hrm;
   DataLoggingSession *dls;
+  DataLoggingSession *dls_windows;
   // gyro: on only while the hand is at (or heading into) an episode
   bool gyro_on;
   uint64_t gyro_wanted_at_ms;
@@ -340,6 +342,29 @@ static void prv_beacon_update(void) {
   s.beacon_minutes = 0;
 }
 
+static void prv_log_window(void) {
+  int32_t features[HabitFeatCount];
+  int32_t score;
+  if (!habit_detect_take_window(&s.det, features, &score)) {
+    return;
+  }
+  HabitWindowRecord w = {.utc = (uint32_t)pbl_realtime(), .score = score};
+  memcpy(w.features, features, sizeof(features));
+  if (!s.dls_windows) {
+    Uuid system_uuid = UUID_SYSTEM;
+    s.dls_windows = dls_create(DlsSystemTagHabitWindow, DATA_LOGGING_BYTE_ARRAY,
+                               sizeof(HabitWindowRecord), true /*buffered*/, true /*resume*/,
+                               &system_uuid);
+    if (!s.dls_windows) {
+      return;
+    }
+  }
+  w.region = (uint8_t)habit_detect_current_region(&s.det);
+  w.state = (uint8_t)s.det.state;
+  w.gyro = s.gyro_on ? 1 : 0;
+  dls_log(s.dls_windows, &w, 1);
+}
+
 // ---- player -----------------------------------------------------------------------------------
 
 static void prv_refill(void) {
@@ -436,6 +461,7 @@ static void prv_accel_cb(AccelData *data, uint32_t num_samples) {
   habit_detect_levels(&s.det, NULL, NULL, &fine, NULL);
   s.motion_sum += fine;
   s.motion_n++;
+  prv_log_window();
   prv_gyro_update();
 }
 

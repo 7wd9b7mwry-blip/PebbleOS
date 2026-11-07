@@ -508,6 +508,8 @@ pbl_clar_test(test_mic_capture
 pbl_clar_test(test_habit_detect
   SOURCES
     fw/services/habit/habit_detect.c
+    fw/services/habit/habit_features.c
+    fw/services/habit/habit_model.c
 )
 
 pbl_clar_test(test_habit_vibes
@@ -519,4 +521,11 @@ pbl_clar_test(test_habit_vibes
 pbl_clar_test(test_sound_level
   SOURCES
     fw/services/habit/sound_level.c
+)
+
+pbl_clar_test(test_habit_features
+  SOURCES
+    fw/services/habit/habit_detect.c
+    fw/services/habit/habit_features.c
+    fw/services/habit/habit_model.c
 )

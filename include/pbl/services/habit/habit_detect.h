@@ -47,6 +47,8 @@ typedef struct {
   uint16_t min_fine_gyro_dps10;    //!< with the gyro: wrist rotation needed (0.1 deg/s units)
   uint16_t min_gravity_mg;         //!< gravity magnitude sanity band (free fall / impacts)
   uint16_t max_gravity_mg;
+  bool use_model;                  //!< episodes also need the classifier (habit_model) to agree
+  int32_t model_threshold;         //!< score (logit x 1024) a window needs; the model's default
 } HabitConfig;
 
 typedef enum {
@@ -69,9 +71,24 @@ typedef enum {
   HabitState_Active,
 } HabitState;
 
+//! Motion window kept for the classifier: the last 2 s (HABIT_FEAT_WINDOW samples at 25 Hz)
+#define HABIT_DETECT_WINDOW 50
+
 typedef struct {
   HabitConfig cfg;
   bool primed;
+  // classifier window (ring) and its latest result
+  HabitVec win_acc[HABIT_DETECT_WINDOW];
+  HabitVec win_gyro[HABIT_DETECT_WINDOW];
+  HabitVec last_gyro;
+  uint8_t win_head;
+  uint8_t win_count;
+  uint8_t since_score;
+  bool scored;            //!< a window was scored since the hand came to the region
+  bool model_ok;          //!< the latest window passed the classifier
+  int32_t model_score;
+  int32_t features[16];   //!< the latest window's features (HabitFeatCount)
+  bool features_fresh;    //!< set when a window was scored; cleared by habit_detect_take_window
   // filters, x16 fixed point (mG * 16, (0.1 deg/s) * 16)
   int32_t grav[3];
   int32_t fast[3];
@@ -103,6 +120,10 @@ HabitEvent habit_detect_feed(HabitDetector *d, uint32_t t_ms, const HabitVec *ac
 //! Feed one gyroscope sample (0.1 deg/s) when the gyro runs separately from the accelerometer
 //! (at the same rate); `vibrating` as for habit_detect_feed().
 void habit_detect_feed_gyro(HabitDetector *d, const HabitVec *gyro, bool vibrating);
+
+//! The latest scored window (features and score), once: true if one was scored since the last
+//! call. For logging the windows near the head for personal training.
+bool habit_detect_take_window(HabitDetector *d, int32_t features[16], int32_t *score);
 
 //! The gyro was turned off: forget its level until it runs again.
 void habit_detect_gyro_off(HabitDetector *d);
