@@ -1,11 +1,11 @@
-# Daily: mirror coredevices/PebbleOS main into this fork's main, merge it into `custom`, and push
-# only if the merge is clean and our build + tests still pass. Otherwise nothing is pushed and an
+# Daily: merge coredevices/PebbleOS main into `custom` and push only if the merge is clean and our build + tests still pass. Otherwise nothing is pushed and an
 # issue describes what needs a manual merge. Small daily merges instead of rare large ones.
 #
+# The fork's main is left alone (pushing to it would run upstream's own CI here).
 # Pushing upstream's commits needs a token allowed to update workflow files (GITHUB_TOKEN never
 # is): a fine-grained PAT for this repository with Contents + Workflows read / write, stored as the
-# repository secret SYNC_TOKEN. The token is only handed to the two push steps: the checkout keeps
-# no credentials, so upstream's build and test code never runs with it.
+# repository secret SYNC_TOKEN. Only the push step gets it: the checkout keeps no credentials, so
+# upstream's build and test code never runs with it.
 name: Sync upstream
 
 on:
@@ -38,17 +38,13 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Fetch upstream and mirror main
+      - name: Fetch upstream
         id: fetch
-        env:
-          SYNC_TOKEN: ${{ secrets.SYNC_TOKEN }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git remote add upstream https://github.com/coredevices/PebbleOS.git
           git fetch --no-tags upstream main
-          # main is a pure mirror: fast-forward only
-          git push "https://x-access-token:${SYNC_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" refs/remotes/upstream/main:refs/heads/main
           echo "upstream=$(git rev-parse --short upstream/main)" >> "$GITHUB_OUTPUT"
 
       - name: Merge upstream into custom
