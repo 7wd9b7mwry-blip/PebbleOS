@@ -504,3 +504,14 @@ pbl_clar_test(test_mic_capture
   DEFINES CONFIG_SERVICE_MIC_CAPTURE
   OVERRIDES dummy_board
 )
+
+pbl_clar_test(test_habit_detect
+  SOURCES
+    fw/services/habit/habit_detect.c
+)
+
+pbl_clar_test(test_habit_vibes
+  SOURCES
+    fw/services/habit/vibe_program.c
+    fw/services/habit/habit_policy.c
+)
