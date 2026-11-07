@@ -1,6 +1,8 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
+#include <string.h>
+
 #include <pbl/services/regular_timer.h>
 #include <pbl/util/size.h>
 
@@ -699,4 +701,79 @@ void test_gap_le_advert__unschedule_job_types(void) {
   cl_assert_equal_b(gap_le_is_advertising_enabled(), false);
 
   free(ad);
+}
+
+// Presence beacon
+///////////////////////////////////////////////////////////
+
+static const uint8_t s_beacon_ad[] = {2, 0x01, 0x06, 4, 0x09, 'P', 'T', '2'};
+
+static void prv_set_beacon(void) {
+  uint8_t buf[sizeof(struct pbl_bt_ad_data) + sizeof(s_beacon_ad)];
+  struct pbl_bt_ad_data *ad = (struct pbl_bt_ad_data *)buf;
+  ad->ad_data_length = sizeof(s_beacon_ad);
+  ad->scan_resp_data_length = 0;
+  memcpy(ad->data, s_beacon_ad, sizeof(s_beacon_ad));
+  gap_le_advert_set_beacon(ad, 1000);
+}
+
+void test_gap_le_advert__beacon_airs_only_while_connected(void) {
+  prv_set_beacon();
+  cl_assert(!gap_le_advert_is_beacon_airing());
+  cl_assert(!gap_le_is_beacon_advertising());
+
+  gap_le_set_advertising_disabled();
+  gap_le_advert_handle_connect_as_slave();
+  cl_assert(gap_le_advert_is_beacon_airing());
+  cl_assert(gap_le_is_beacon_advertising());
+  Advertising_Data_t ad;
+  cl_assert_equal_i(gap_le_get_advertising_data(&ad), sizeof(s_beacon_ad));
+  cl_assert(memcmp(ad.data, s_beacon_ad, sizeof(s_beacon_ad)) == 0);
+
+  gap_le_advert_handle_disconnect_as_slave();
+  cl_assert(!gap_le_advert_is_beacon_airing());
+  cl_assert(!gap_le_is_beacon_advertising());
+}
+
+void test_gap_le_advert__beacon_set_while_connected_and_removed(void) {
+  gap_le_set_advertising_disabled();
+  gap_le_advert_handle_connect_as_slave();
+  cl_assert(!gap_le_advert_is_beacon_airing());
+  prv_set_beacon();
+  cl_assert(gap_le_is_beacon_advertising());
+  gap_le_advert_set_beacon(NULL, 0);
+  cl_assert(!gap_le_advert_is_beacon_airing());
+  cl_assert(!gap_le_is_advertising_enabled());
+  gap_le_advert_handle_disconnect_as_slave();
+}
+
+void test_gap_le_advert__jobs_resume_after_the_beacon(void) {
+  // a connectable job scheduled while disconnected airs again after a connection with the beacon
+  uint8_t buf[sizeof(struct pbl_bt_ad_data) + 3];
+  struct pbl_bt_ad_data *ad = (struct pbl_bt_ad_data *)buf;
+  ad->ad_data_length = 3;
+  ad->scan_resp_data_length = 0;
+  const uint8_t flags[] = {2, 0x01, 0x02};
+  memcpy(ad->data, flags, sizeof(flags));
+  const GAPLEAdvertisingJobTerm term = {
+    .duration_secs = GAPLE_ADVERTISING_DURATION_INFINITE,
+    .interval = GAPLEAdvertisingInterval_Short,
+  };
+  GAPLEAdvertisingJobRef job = gap_le_advert_schedule(ad, &term, 1, NULL, NULL,
+                                                      GAPLEAdvertisingJobTagReconnection);
+  cl_assert(job);
+  cl_assert(gap_le_is_advertising_enabled());
+  cl_assert(!gap_le_is_beacon_advertising());
+  prv_set_beacon();
+  gap_le_set_advertising_disabled();
+  gap_le_advert_handle_connect_as_slave();
+  cl_assert(gap_le_is_beacon_advertising());
+  gap_le_advert_handle_disconnect_as_slave();
+  cl_assert(gap_le_is_advertising_enabled());
+  cl_assert(!gap_le_is_beacon_advertising());
+  Advertising_Data_t got;
+  cl_assert_equal_i(gap_le_get_advertising_data(&got), 3);
+  cl_assert(memcmp(got.data, flags, 3) == 0);
+  gap_le_advert_unschedule(job);
+  gap_le_advert_set_beacon(NULL, 0);
 }

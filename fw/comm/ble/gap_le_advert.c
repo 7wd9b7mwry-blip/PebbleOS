@@ -101,6 +101,11 @@ static bool s_is_advertising;
 
 static bool s_is_connected;
 
+//! Presence beacon, aired while connected (see gap_le_advert_set_beacon)
+static struct pbl_bt_ad_data *s_beacon;
+static uint32_t s_beacon_interval_ms;
+static bool s_beacon_airing;
+
 //! Cache of the last advertising transmission power in dBm. A cache is kept in
 //! case the API call fails, for example because Bluetooth is disabled.
 //! 12 dBm is what the PAN1315 Bluetooth module reports.
@@ -110,6 +115,31 @@ static int8_t s_tx_power_cached = 12;
 //! Prototypes
 
 static void prv_perform_next_job(bool force_refresh);
+
+//! bt_lock is expected to be taken!
+static void prv_beacon_stop(void) {
+  if (s_beacon_airing) {
+    pbl_bt_advert_advertising_disable();
+    s_beacon_airing = false;
+    // the controller holds the beacon's data now: jobs must set theirs again
+    s_current_ad_data = nullptr;
+  }
+}
+
+//! bt_lock is expected to be taken!
+static void prv_beacon_start(void) {
+  if (!s_beacon || !s_is_connected) {
+    return;
+  }
+  if (s_beacon_airing) {
+    pbl_bt_advert_advertising_disable();
+    s_beacon_airing = false;
+  }
+  if (pbl_bt_advert_set_advertising_data(s_beacon)) {
+    s_current_ad_data = nullptr;
+    s_beacon_airing = pbl_bt_advert_beacon_enable(s_beacon_interval_ms);
+  }
+}
 
 // -----------------------------------------------------------------------------
 //! Analytics helpers for tracking advertising interval time.
@@ -569,6 +599,11 @@ void gap_le_advert_deinit(void) {
     while (s_jobs) {
       gap_le_advert_unschedule(s_jobs);
     }
+    prv_beacon_stop();
+    if (s_beacon) {
+      pbl_free(s_beacon);
+      s_beacon = nullptr;
+    }
 
     PBL_ASSERTN(!regular_timer_is_scheduled(&s_cycle_regular_timer) ||
                 regular_timer_pending_deletion(&s_cycle_regular_timer));
@@ -595,9 +630,40 @@ void gap_le_advert_handle_connect_as_slave(void) {
     prv_analytics_stop_timers();
 
     s_is_connected = true;
+    prv_beacon_start();
   }
 unlock:
   bt_unlock();
+}
+
+// -----------------------------------------------------------------------------
+void gap_le_advert_set_beacon(const struct pbl_bt_ad_data *payload, uint32_t interval_ms) {
+  bt_lock();
+  {
+    if (s_beacon) {
+      pbl_free(s_beacon);
+      s_beacon = nullptr;
+    }
+    if (payload && payload->ad_data_length <= PBL_BT_AD_REPORT_DATA_MAX_LENGTH &&
+        payload->scan_resp_data_length <= PBL_BT_AD_REPORT_DATA_MAX_LENGTH) {
+      const size_t len = payload->ad_data_length + payload->scan_resp_data_length;
+      s_beacon = pbl_malloc_check(sizeof(struct pbl_bt_ad_data) + len);
+      memcpy(s_beacon, payload, sizeof(struct pbl_bt_ad_data) + len);
+      s_beacon_interval_ms = interval_ms;
+    }
+    if (s_gap_le_advert_is_initialized) {
+      if (s_beacon) {
+        prv_beacon_start();
+      } else {
+        prv_beacon_stop();
+      }
+    }
+  }
+  bt_unlock();
+}
+
+bool gap_le_advert_is_beacon_airing(void) {
+  return s_beacon_airing;
 }
 
 // -----------------------------------------------------------------------------
@@ -609,6 +675,7 @@ void gap_le_advert_handle_disconnect_as_slave(void) {
     }
 
     s_is_connected = false;
+    prv_beacon_stop();
 
     // Call prv_perform_next_job() to trigger refreshing the configuration of
     // the controller: it can advertise connectable packets again.
@@ -632,8 +699,11 @@ void pbl_bt_handle_host_resynced(void) {
     s_current_ad_data = nullptr;
     s_is_advertising = false;
 
+    s_beacon_airing = false;
     if (s_current && !s_is_connected) {
       prv_perform_next_job(true /* force refresh */);
+    } else if (s_is_connected) {
+      prv_beacon_start();
     }
   }
 unlock:

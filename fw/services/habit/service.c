@@ -11,6 +11,7 @@
 #include <pbl/kernel/time.h>
 #include <pbl/logging/logging.h>
 #include <pbl/services/activity/activity.h>
+#include <pbl/services/battery/battery_state.h>
 #include <pbl/services/data_logging/data_logging_service.h>
 #include <pbl/services/habit/habit_policy.h>
 #include <pbl/services/hrm/hrm_manager.h>
@@ -24,6 +25,7 @@
 #include <pbl/util/uuid.h>
 
 #include <applib/accel_service_private.h>
+#include <comm/ble/gap_le_advert.h>
 #include <kernel/events.h>
 
 PBL_LOG_MODULE_DEFINE(service_habit, CONFIG_SERVICE_HABIT_LOG_LEVEL);
@@ -41,6 +43,8 @@ PBL_LOG_MODULE_DEFINE(service_habit, CONFIG_SERVICE_HABIT_LOG_LEVEL);
 #define SETTINGS_MAX_SIZE 2048
 #define SETTINGS_VERSION 1
 #define BASELINE_SAVE_MIN 60    // learned baselines are saved hourly
+#define BEACON_INTERVAL_MS 1000
+#define BEACON_REFRESH_MIN 10   // battery level refresh; also re-arms after a Bluetooth restart
 #define GYRO_BUF 64             // > 2 s at 26 Hz
 #define GYRO_OFF_AFTER_MS 10000 // hand away from the head this long: gyro off again
 
@@ -77,6 +81,8 @@ static struct {
   // counters
   uint32_t episodes, alerts, smart_vibes;
   bool settings_loaded;
+  bool beacon;
+  uint8_t beacon_minutes;
   uint8_t regions_calibrated;
   uint16_t minutes_since_save;
 } s;
@@ -99,6 +105,7 @@ static const char KEY_REGIONS[] = "regions";
 static const char KEY_VIBRATE[] = "vibrate";
 static const char KEY_SLEEP_ALERTS[] = "sleep_alerts";
 static const char KEY_BASELINES[] = "baselines";
+static const char KEY_BEACON[] = "beacon";
 
 static bool prv_settings_get(const char *key, void *val, size_t len) {
   struct pbl_settings_file file;
@@ -159,6 +166,9 @@ static void prv_load_settings(void) {
   }
   if (prv_settings_get(KEY_SLEEP_ALERTS, &v, 1)) {
     s.alerts_while_asleep = v != 0;
+  }
+  if (prv_settings_get(KEY_BEACON, &v, 1)) {
+    s.beacon = v != 0;
   }
   BaselinesRecord b;
   if (prv_settings_get(KEY_BASELINES, &b, sizeof(b)) && b.version == SETTINGS_VERSION) {
@@ -228,6 +238,29 @@ static void prv_log(HabitLogKind kind, uint8_t a, uint16_t b, uint16_t c, uint16
   const HabitLogRecord r = {
       .utc = (uint32_t)pbl_realtime(), .kind = kind, .a = a, .b = b, .c = c, .d = d, .e = e};
   dls_log(s.dls, &r, 1);
+}
+
+// ---- presence beacon ----------------------------------------------------------------------------
+
+static void prv_beacon_update(void) {
+  if (!s.beacon || !s.running) {
+    gap_le_advert_set_beacon(NULL, 0);
+    return;
+  }
+  const uint8_t pct = battery_get_charge_state().charge_percent;
+  // flags; BTHome v2 service data (UUID 0xFCD2, unencrypted, object 0x01 battery %); name
+  const uint8_t ad[] = {
+      2, 0x01, 0x06,
+      6, 0x16, 0xD2, 0xFC, 0x40, 0x01, pct,
+      4, 0x09, 'P', 'T', '2',
+  };
+  uint8_t buf[sizeof(struct pbl_bt_ad_data) + sizeof(ad)];
+  struct pbl_bt_ad_data *data = (struct pbl_bt_ad_data *)buf;
+  data->ad_data_length = sizeof(ad);
+  data->scan_resp_data_length = 0;
+  memcpy(data->data, ad, sizeof(ad));
+  gap_le_advert_set_beacon(data, BEACON_INTERVAL_MS);
+  s.beacon_minutes = 0;
 }
 
 // ---- player -----------------------------------------------------------------------------------
@@ -407,6 +440,9 @@ static void prv_minute_kbg(void *unused) {
   if (++s.minutes_since_save >= BASELINE_SAVE_MIN) {
     prv_save_baselines();
   }
+  if (++s.beacon_minutes >= BEACON_REFRESH_MIN) {
+    prv_beacon_update();
+  }
 }
 
 static void prv_minute_cb(struct pbl_cron_job *job, void *data) {
@@ -440,6 +476,7 @@ static void prv_start_kbg(void *unused) {
                                               false /*low_latency*/, prv_hrm_cb, nullptr);
   pbl_cron_job_schedule(&s_minute_job);
   s.running = true;
+  prv_beacon_update();
   PBL_LOG_INFO("started");
 }
 
@@ -463,6 +500,7 @@ static void prv_stop_kbg(void *unused) {
   accel_session_delete(s.accel);
   s.accel = nullptr;
   s.running = false;
+  gap_le_advert_set_beacon(NULL, 0);
   PBL_LOG_INFO("stopped");
 }
 
@@ -482,6 +520,7 @@ void habit_service_init(void) {
   smart_vibes_init(&s.smart, &scfg);
   s.refill_timer = new_timer_create();
   s.hrm = HRM_INVALID_SESSION_REF;
+  s.beacon = true;
 }
 
 void habit_service_set_enabled(bool enabled) {
@@ -566,6 +605,18 @@ void habit_service_set_alerts_while_asleep(bool on) {
   system_task_add_callback(prv_set_sleep_alerts_kbg, (void *)(uintptr_t)on);
 }
 
+static void prv_set_beacon_kbg(void *on) {
+  prv_load_settings();
+  s.beacon = on != NULL;
+  const uint8_t v = on ? 1 : 0;
+  prv_settings_set(KEY_BEACON, &v, 1);
+  prv_beacon_update();
+}
+
+void habit_service_set_beacon(bool on) {
+  system_task_add_callback(prv_set_beacon_kbg, (void *)(uintptr_t)on);
+}
+
 void habit_service_calibrate(HabitRegion region) {
   system_task_add_callback(prv_calibrate_kbg, (void *)(uintptr_t)region);
 }
@@ -592,4 +643,6 @@ void habit_service_get_status(HabitServiceStatus *st) {
   st->vibrate = s.resp.cfg.mode == HabitResponseMode_Vibrate;
   st->alerts_while_asleep = s.alerts_while_asleep;
   st->regions_calibrated = s.regions_calibrated;
+  st->beacon = s.beacon;
+  st->beacon_airing = gap_le_advert_is_beacon_airing();
 }

@@ -59,6 +59,9 @@ void habit_service_label(uint8_t label);
 //! Settings, persisted in flash (with the calibration and the learned baselines).
 void habit_service_set_vibrate(bool vibrate);
 void habit_service_set_alerts_while_asleep(bool on);
+//! Presence beacon: while connected to the phone, advertise a BTHome beacon (battery) every
+//! second, so room sensors (ESPHome Bluetooth proxies, Home Assistant) can locate the watch.
+void habit_service_set_beacon(bool on);
 //! Forget the calibrated regions (back to the generic "hand at the head" default).
 void habit_service_reset_calibration(void);
 
@@ -75,6 +78,8 @@ typedef struct {
   bool vibrate;
   bool alerts_while_asleep;
   uint8_t regions_calibrated;  //!< bit per HabitRegion
+  bool beacon;
+  bool beacon_airing;
 } HabitServiceStatus;
 
 void habit_service_get_status(HabitServiceStatus *status);

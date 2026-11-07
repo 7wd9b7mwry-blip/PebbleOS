@@ -20,6 +20,7 @@ static int prv_cmd_status(const struct pbl_shell *sh, size_t argc, char **argv) 
                   st.sleep_hr, st.rest_rmssd);
   pbl_shell_print(sh, "vibrate %d, alerts while asleep %d, calibrated 0x%02x", st.vibrate,
                   st.alerts_while_asleep, st.regions_calibrated);
+  pbl_shell_print(sh, "beacon %d (airing %d)", st.beacon, st.beacon_airing);
   pbl_shell_print(sh, "playing %d (%s), motor %ld", st.playing,
                   st.playing ? vibe_program_get(st.program)->name : "-",
                   (long)vibes_get_vibe_strength());
@@ -107,6 +108,15 @@ static int prv_cmd_sleepalerts(const struct pbl_shell *sh, size_t argc, char **a
   return rc;
 }
 
+static int prv_cmd_beacon(const struct pbl_shell *sh, size_t argc, char **argv) {
+  bool on;
+  const int rc = prv_on_off(sh, argv[1], &on);
+  if (rc == 0) {
+    habit_service_set_beacon(on);
+  }
+  return rc;
+}
+
 static int prv_cmd_uncal(const struct pbl_shell *sh, size_t argc, char **argv) {
   habit_service_reset_calibration();
   return 0;
@@ -124,6 +134,8 @@ static const struct pbl_shell_cmd sub_habit[] = {
   PBL_SHELL_CMD_ARG(sleepalerts, nullptr, "Alerts while asleep on|off", prv_cmd_sleepalerts, 2,
                     0),
   PBL_SHELL_CMD(uncal, nullptr, "Forget the calibrated regions", prv_cmd_uncal),
+  PBL_SHELL_CMD_ARG(beacon, nullptr, "Presence beacon on|off (aired while connected)",
+                    prv_cmd_beacon, 2, 0),
   PBL_SHELL_SUBCMD_SET_END,
 };
 

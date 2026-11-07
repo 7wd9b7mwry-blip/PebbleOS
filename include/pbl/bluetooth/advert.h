@@ -52,6 +52,15 @@ bool pbl_bt_advert_advertising_enable(uint32_t min_interval_ms, uint32_t max_int
 void pbl_bt_advert_advertising_disable(void);
 
 /**
+ * @brief Start non-connectable, non-discoverable advertising (a beacon).
+ * Allowed while connected as a peripheral if the controller supports it. Stopped by
+ * pbl_bt_advert_advertising_disable().
+ * @param interval_ms Advertising interval in milliseconds.
+ * @return true if advertising started.
+ */
+bool pbl_bt_advert_beacon_enable(uint32_t interval_ms);
+
+/**
  * @brief Get the advertising transmit power.
  *
  * Not supported by the NimBLE backend, which always returns false.

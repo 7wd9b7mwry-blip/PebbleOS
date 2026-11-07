@@ -127,6 +127,14 @@ void gap_le_advert_deinit(void);
 //! non-connectable advertisements after the connection is established.
 void gap_le_advert_handle_connect_as_slave(void);
 
+//! Presence beacon: while connected as a peripheral (when nothing else may advertise), air
+//! `payload` as non-connectable advertising every `interval_ms`. NULL removes it. The payload is
+//! copied; calling again updates it.
+void gap_le_advert_set_beacon(const struct pbl_bt_ad_data *payload, uint32_t interval_ms);
+
+//! True while the beacon is on air.
+bool gap_le_advert_is_beacon_airing(void);
+
 //! This should be called so that gap_le_advert can update its internal state
 //! and start advertising connectable advertisements.
 void gap_le_advert_handle_disconnect_as_slave(void);

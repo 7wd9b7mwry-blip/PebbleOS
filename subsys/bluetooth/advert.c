@@ -450,6 +450,32 @@ static int prv_handle_gap_event(struct ble_gap_event *event, void *arg) {
   return 0;
 }
 
+bool pbl_bt_advert_beacon_enable(uint32_t interval_ms) {
+  int rc;
+  uint8_t own_addr_type;
+  struct ble_gap_adv_params advp = {
+    .conn_mode = BLE_GAP_CONN_MODE_NON,
+    .disc_mode = BLE_GAP_DISC_MODE_NON,
+    .itvl_min = BLE_GAP_ADV_ITVL_MS(interval_ms),
+    .itvl_max = BLE_GAP_ADV_ITVL_MS(interval_ms),
+  };
+
+  rc = ble_hs_id_infer_auto(0, &own_addr_type);
+  if (rc != 0) {
+    PBL_LOG_ERR("Failed to infer own address type (%d)", rc);
+    return false;
+  }
+
+  rc = ble_gap_adv_start(own_addr_type, nullptr, BLE_HS_FOREVER, &advp, prv_handle_gap_event,
+                         nullptr);
+  if (rc != 0) {
+    PBL_LOG_WRN("Failed to start beacon advertising (0x%04x)", (uint16_t)rc);
+    return false;
+  }
+
+  return true;
+}
+
 bool pbl_bt_advert_advertising_enable(uint32_t min_interval_ms, uint32_t max_interval_ms) {
   int rc;
   uint8_t own_addr_type;
