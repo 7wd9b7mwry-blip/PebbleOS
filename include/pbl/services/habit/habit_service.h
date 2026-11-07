@@ -56,6 +56,12 @@ void habit_service_calibrate(HabitRegion region);
 //! The wearer labels the last few seconds (1: "that was a habit", 2: "false alarm").
 void habit_service_label(uint8_t label);
 
+//! Settings, persisted in flash (with the calibration and the learned baselines).
+void habit_service_set_vibrate(bool vibrate);
+void habit_service_set_alerts_while_asleep(bool on);
+//! Forget the calibrated regions (back to the generic "hand at the head" default).
+void habit_service_reset_calibration(void);
+
 typedef struct {
   bool running;
   HabitRegion region_now;
@@ -66,6 +72,9 @@ typedef struct {
   uint16_t rest_rmssd;
   bool playing;
   VibeProgramId program;
+  bool vibrate;
+  bool alerts_while_asleep;
+  uint8_t regions_calibrated;  //!< bit per HabitRegion
 } HabitServiceStatus;
 
 void habit_service_get_status(HabitServiceStatus *status);

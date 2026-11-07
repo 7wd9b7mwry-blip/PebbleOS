@@ -18,6 +18,8 @@ static int prv_cmd_status(const struct pbl_shell *sh, size_t argc, char **argv) 
                   (unsigned long)st.alerts, (unsigned long)st.smart_vibes);
   pbl_shell_print(sh, "baselines: rest %u bpm, sleep %u bpm, rest RMSSD %u ms", st.rest_hr,
                   st.sleep_hr, st.rest_rmssd);
+  pbl_shell_print(sh, "vibrate %d, alerts while asleep %d, calibrated 0x%02x", st.vibrate,
+                  st.alerts_while_asleep, st.regions_calibrated);
   pbl_shell_print(sh, "playing %d (%s), motor %ld", st.playing,
                   st.playing ? vibe_program_get(st.program)->name : "-",
                   (long)vibes_get_vibe_strength());
@@ -75,6 +77,41 @@ static int prv_cmd_label(const struct pbl_shell *sh, size_t argc, char **argv) {
   return 0;
 }
 
+static int prv_on_off(const struct pbl_shell *sh, const char *arg, bool *out) {
+  if (strcmp(arg, "on") == 0) {
+    *out = true;
+  } else if (strcmp(arg, "off") == 0) {
+    *out = false;
+  } else {
+    pbl_shell_error(sh, "expected on or off");
+    return -EINVAL;
+  }
+  return 0;
+}
+
+static int prv_cmd_vibrate(const struct pbl_shell *sh, size_t argc, char **argv) {
+  bool on;
+  const int rc = prv_on_off(sh, argv[1], &on);
+  if (rc == 0) {
+    habit_service_set_vibrate(on);
+  }
+  return rc;
+}
+
+static int prv_cmd_sleepalerts(const struct pbl_shell *sh, size_t argc, char **argv) {
+  bool on;
+  const int rc = prv_on_off(sh, argv[1], &on);
+  if (rc == 0) {
+    habit_service_set_alerts_while_asleep(on);
+  }
+  return rc;
+}
+
+static int prv_cmd_uncal(const struct pbl_shell *sh, size_t argc, char **argv) {
+  habit_service_reset_calibration();
+  return 0;
+}
+
 static const struct pbl_shell_cmd sub_habit[] = {
   PBL_SHELL_CMD(status, nullptr, "Detector, counters and baselines", prv_cmd_status),
   PBL_SHELL_CMD_ARG(play, nullptr, "Play <program> [seconds]", prv_cmd_play, 2, 1),
@@ -82,6 +119,11 @@ static const struct pbl_shell_cmd sub_habit[] = {
   PBL_SHELL_CMD_ARG(cal, nullptr, "Calibrate <region>: the hand is there now", prv_cmd_cal, 2, 0),
   PBL_SHELL_CMD_ARG(label, nullptr, "Label the last episode: 1 habit, 2 false alarm",
                     prv_cmd_label, 2, 0),
+  PBL_SHELL_CMD_ARG(vibrate, nullptr, "Alerts on|off (off: detect and log only)",
+                    prv_cmd_vibrate, 2, 0),
+  PBL_SHELL_CMD_ARG(sleepalerts, nullptr, "Alerts while asleep on|off", prv_cmd_sleepalerts, 2,
+                    0),
+  PBL_SHELL_CMD(uncal, nullptr, "Forget the calibrated regions", prv_cmd_uncal),
   PBL_SHELL_SUBCMD_SET_END,
 };
 

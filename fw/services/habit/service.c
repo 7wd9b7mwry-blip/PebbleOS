@@ -20,6 +20,7 @@
 #include <pbl/services/system_task.h>
 #include <pbl/services/time.h>
 #include <pbl/services/vibe_pattern.h>
+#include <pbl/settings/settings.h>
 #include <pbl/util/uuid.h>
 
 #include <applib/accel_service_private.h>
@@ -36,6 +37,10 @@ PBL_LOG_MODULE_DEFINE(service_habit, CONFIG_SERVICE_HABIT_LOG_LEVEL);
 #define HR_FRESH_MS (3 * 60 * 1000)
 #define MIN_HR_CONFIDENCE 50
 #define MIN_PPI_CONFIDENCE 60
+#define SETTINGS_FILE "/habit"
+#define SETTINGS_MAX_SIZE 2048
+#define SETTINGS_VERSION 1
+#define BASELINE_SAVE_MIN 60    // learned baselines are saved hourly
 #define GYRO_BUF 64             // > 2 s at 26 Hz
 #define GYRO_OFF_AFTER_MS 10000 // hand away from the head this long: gyro off again
 
@@ -71,7 +76,100 @@ static struct {
   uint64_t gyro_wanted_at_ms;
   // counters
   uint32_t episodes, alerts, smart_vibes;
+  bool settings_loaded;
+  uint8_t regions_calibrated;
+  uint16_t minutes_since_save;
 } s;
+
+// ---- settings ---------------------------------------------------------------------------------
+
+typedef struct PBL_PACKED {
+  uint8_t version;
+  uint8_t calibrated;  // bit per region
+  HabitRegionProto regions[HabitRegionCount];
+} RegionsRecord;
+
+typedef struct PBL_PACKED {
+  uint8_t version;
+  int32_t rest_hr, sleep_hr, rest_rmssd;
+  uint16_t rest_n, sleep_n, hrv_n;
+} BaselinesRecord;
+
+static const char KEY_REGIONS[] = "regions";
+static const char KEY_VIBRATE[] = "vibrate";
+static const char KEY_SLEEP_ALERTS[] = "sleep_alerts";
+static const char KEY_BASELINES[] = "baselines";
+
+static bool prv_settings_get(const char *key, void *val, size_t len) {
+  struct pbl_settings_file file;
+  if (pbl_settings_open(&file, SETTINGS_FILE, SETTINGS_MAX_SIZE) != 0) {
+    return false;
+  }
+  const bool ok = pbl_settings_get_len(&file, key, strlen(key)) == len &&
+                  pbl_settings_get(&file, key, strlen(key), val, len) == 0;
+  pbl_settings_close(&file);
+  return ok;
+}
+
+static void prv_settings_set(const char *key, const void *val, size_t len) {
+  struct pbl_settings_file file;
+  if (pbl_settings_open(&file, SETTINGS_FILE, SETTINGS_MAX_SIZE) != 0) {
+    PBL_LOG_WRN("could not open the settings file");
+    return;
+  }
+  if (pbl_settings_set(&file, key, strlen(key), val, len) != 0) {
+    PBL_LOG_WRN("could not save %s", key);
+  }
+  pbl_settings_close(&file);
+}
+
+static void prv_save_regions(void) {
+  RegionsRecord r = {.version = SETTINGS_VERSION, .calibrated = s.regions_calibrated};
+  memcpy(r.regions, s.det.cfg.regions, sizeof(r.regions));
+  prv_settings_set(KEY_REGIONS, &r, sizeof(r));
+}
+
+static void prv_save_baselines(void) {
+  const BaselinesRecord b = {
+      .version = SETTINGS_VERSION,
+      .rest_hr = s.smart.rest_hr,
+      .sleep_hr = s.smart.sleep_hr,
+      .rest_rmssd = s.smart.rest_rmssd,
+      .rest_n = s.smart.rest_n,
+      .sleep_n = s.smart.sleep_n,
+      .hrv_n = s.smart.hrv_n,
+  };
+  prv_settings_set(KEY_BASELINES, &b, sizeof(b));
+  s.minutes_since_save = 0;
+}
+
+static void prv_load_settings(void) {
+  if (s.settings_loaded) {
+    return;
+  }
+  s.settings_loaded = true;
+  RegionsRecord r;
+  if (prv_settings_get(KEY_REGIONS, &r, sizeof(r)) && r.version == SETTINGS_VERSION) {
+    memcpy(s.det.cfg.regions, r.regions, sizeof(r.regions));
+    s.regions_calibrated = r.calibrated;
+  }
+  uint8_t v;
+  if (prv_settings_get(KEY_VIBRATE, &v, 1)) {
+    s.resp.cfg.mode = v ? HabitResponseMode_Vibrate : HabitResponseMode_Off;
+  }
+  if (prv_settings_get(KEY_SLEEP_ALERTS, &v, 1)) {
+    s.alerts_while_asleep = v != 0;
+  }
+  BaselinesRecord b;
+  if (prv_settings_get(KEY_BASELINES, &b, sizeof(b)) && b.version == SETTINGS_VERSION) {
+    s.smart.rest_hr = b.rest_hr;
+    s.smart.sleep_hr = b.sleep_hr;
+    s.smart.rest_rmssd = b.rest_rmssd;
+    s.smart.rest_n = b.rest_n;
+    s.smart.sleep_n = b.sleep_n;
+    s.smart.hrv_n = b.hrv_n;
+  }
+}
 
 // gyro samples from the IMU driver's work context, drained on KernelBG
 static PBL_MUTEX_DEFINE(s_gyro_mutex);
@@ -306,6 +404,9 @@ static void prv_minute_kbg(void *unused) {
   s.motion_sum = s.motion_n = 0;
   s.ppi_sq_sum = 0;
   s.ppi_n = 0;
+  if (++s.minutes_since_save >= BASELINE_SAVE_MIN) {
+    prv_save_baselines();
+  }
 }
 
 static void prv_minute_cb(struct pbl_cron_job *job, void *data) {
@@ -325,6 +426,7 @@ static void prv_start_kbg(void *unused) {
   if (s.running || !s.enabled) {
     return;
   }
+  prv_load_settings();
   s.accel = accel_session_create();
   if (!s.accel) {
     PBL_LOG_ERR("no accel session");
@@ -347,6 +449,7 @@ static void prv_stop_kbg(void *unused) {
   }
   prv_stop();
   pbl_cron_job_unschedule(&s_minute_job);
+  prv_save_baselines();
   if (s.hrm != HRM_INVALID_SESSION_REF) {
     sys_hrm_manager_unsubscribe(s.hrm);
     s.hrm = HRM_INVALID_SESSION_REF;
@@ -415,8 +518,52 @@ void habit_service_stop(void) {
 }
 
 static void prv_calibrate_kbg(void *region) {
-  habit_detect_calibrate_region(&s.det, (HabitRegion)(uintptr_t)region, 940);  // ~20 deg
-  PBL_LOG_INFO("calibrated %s", habit_region_name((HabitRegion)(uintptr_t)region));
+  const HabitRegion r = (HabitRegion)(uintptr_t)region;
+  prv_load_settings();
+  if (s.regions_calibrated == 0) {
+    // the first calibrated region replaces the generic default
+    for (int i = 0; i < HabitRegionCount; i++) {
+      s.det.cfg.regions[i].enabled = false;
+    }
+  }
+  habit_detect_calibrate_region(&s.det, r, 940);  // ~20 deg
+  s.regions_calibrated |= (uint8_t)(1u << r);
+  prv_save_regions();
+  PBL_LOG_INFO("calibrated %s", habit_region_name(r));
+}
+
+static void prv_reset_calibration_kbg(void *unused) {
+  HabitConfig dcfg;
+  habit_detect_default_config(&dcfg);
+  memcpy(s.det.cfg.regions, dcfg.regions, sizeof(dcfg.regions));
+  s.regions_calibrated = 0;
+  prv_save_regions();
+}
+
+void habit_service_reset_calibration(void) {
+  system_task_add_callback(prv_reset_calibration_kbg, nullptr);
+}
+
+static void prv_set_vibrate_kbg(void *on) {
+  prv_load_settings();
+  s.resp.cfg.mode = on ? HabitResponseMode_Vibrate : HabitResponseMode_Off;
+  const uint8_t v = on ? 1 : 0;
+  prv_settings_set(KEY_VIBRATE, &v, 1);
+}
+
+void habit_service_set_vibrate(bool vibrate) {
+  system_task_add_callback(prv_set_vibrate_kbg, (void *)(uintptr_t)vibrate);
+}
+
+static void prv_set_sleep_alerts_kbg(void *on) {
+  prv_load_settings();
+  s.alerts_while_asleep = on != NULL;
+  const uint8_t v = on ? 1 : 0;
+  prv_settings_set(KEY_SLEEP_ALERTS, &v, 1);
+}
+
+void habit_service_set_alerts_while_asleep(bool on) {
+  system_task_add_callback(prv_set_sleep_alerts_kbg, (void *)(uintptr_t)on);
 }
 
 void habit_service_calibrate(HabitRegion region) {
@@ -442,4 +589,7 @@ void habit_service_get_status(HabitServiceStatus *st) {
   smart_vibes_baselines(&s.smart, &st->rest_hr, &st->sleep_hr, &st->rest_rmssd);
   st->playing = s.playing;
   st->program = s.program;
+  st->vibrate = s.resp.cfg.mode == HabitResponseMode_Vibrate;
+  st->alerts_while_asleep = s.alerts_while_asleep;
+  st->regions_calibrated = s.regions_calibrated;
 }
