@@ -1,4 +1,4 @@
-/* SPDX-FileCopyrightText: 2026 Daniel Allex */
+/* SPDX-FileCopyrightText: 2026 7wd9b7mwry-blip */
 /* SPDX-License-Identifier: Apache-2.0 */
 
 //! Decisions, separate from the sensing and the motor: which vibration to play and when.

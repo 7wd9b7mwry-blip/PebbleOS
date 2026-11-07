@@ -1,0 +1,118 @@
+# Daily: mirror coredevices/PebbleOS main into this fork's main, merge it into `custom`, and push
+# only if the merge is clean and our build + tests still pass. Otherwise nothing is pushed and an
+# issue describes what needs a manual merge. Small daily merges instead of rare large ones.
+#
+# Pushing upstream's commits needs a token allowed to update workflow files (GITHUB_TOKEN never
+# is): a fine-grained PAT for this repository with Contents + Workflows read / write, stored as the
+# repository secret SYNC_TOKEN. The token is only handed to the two push steps: the checkout keeps
+# no credentials, so upstream's build and test code never runs with it.
+name: Sync upstream
+
+on:
+  schedule:
+    - cron: '23 9 * * *'   # 09:23 UTC daily
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: github.repository != 'coredevices/PebbleOS'
+    runs-on: ubuntu-24.04
+    container:
+      image: ghcr.io/coredevices/pebbleos-docker:v10   # upstream's CI image (see test.yml)
+    steps:
+      - name: Mark workspace as safe
+        run: git config --system --add safe.directory "${GITHUB_WORKSPACE}"
+
+      - name: Checkout custom
+        uses: actions/checkout@v4
+        with:
+          ref: custom
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Fetch upstream and mirror main
+        id: fetch
+        env:
+          SYNC_TOKEN: ${{ secrets.SYNC_TOKEN }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream https://github.com/coredevices/PebbleOS.git
+          git fetch --no-tags upstream main
+          # main is a pure mirror: fast-forward only
+          git push "https://x-access-token:${SYNC_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" refs/remotes/upstream/main:refs/heads/main
+          echo "upstream=$(git rev-parse --short upstream/main)" >> "$GITHUB_OUTPUT"
+
+      - name: Merge upstream into custom
+        id: merge
+        run: |
+          if git merge-base --is-ancestor upstream/main HEAD; then
+            echo "result=uptodate" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if git merge --no-edit -m "Merge upstream main ${{ steps.fetch.outputs.upstream }}" upstream/main; then
+            echo "result=merged" >> "$GITHUB_OUTPUT"
+          else
+            git diff --name-only --diff-filter=U > conflicts.txt
+            git merge --abort
+            echo "result=conflict" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Submodules and Python dependencies
+        if: steps.merge.outputs.result == 'merged'
+        run: |
+          git submodule update --init --recursive
+          pip install -U pip
+          pip install -r requirements.txt
+
+      - name: Unit tests (ours)
+        id: test
+        if: steps.merge.outputs.result == 'merged'
+        run: pbl test -R 'habit|gyro|beacon' --output-on-failure
+
+      - name: Build Pebble Time 2 (obelix pvt) and emulator firmware
+        id: build
+        if: steps.merge.outputs.result == 'merged'
+        run: |
+          pbl configure -b build-obelix --board obelix@pvt -DCONFIG_FIRMWARE_SLOT=0
+          pbl build -b build-obelix
+          pbl configure -b build-qemu --board qemu_emery
+          pbl build -b build-qemu
+
+      - name: Push custom
+        if: steps.merge.outputs.result == 'merged'
+        env:
+          SYNC_TOKEN: ${{ secrets.SYNC_TOKEN }}
+        run: git push "https://x-access-token:${SYNC_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:custom
+
+      - name: Report a failed sync
+        if: failure() || steps.merge.outputs.result == 'conflict'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESULT: ${{ steps.merge.outputs.result }}
+          UPSTREAM: ${{ steps.fetch.outputs.upstream }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ "$RESULT" = "conflict" ]; then
+            title="Upstream sync: merge conflict with $UPSTREAM"
+            body="Merging upstream main ($UPSTREAM) into custom conflicts in:"$'\n\n'"$(sed 's/^/- /' conflicts.txt)"$'\n\n'"Nothing was pushed. Run: $RUN_URL"
+          else
+            title="Upstream sync: build or tests fail after merging $UPSTREAM"
+            body="The merge of upstream main ($UPSTREAM) into custom is clean, but the build or our tests fail, so nothing was pushed. Run: $RUN_URL"
+          fi
+          # one open issue at a time: comment on it if it exists
+          num=$(gh issue list --repo "$GITHUB_REPOSITORY" --label sync --state open --json number --jq '.[0].number' 2>/dev/null || true)
+          if [ -n "$num" ]; then
+            gh issue comment "$num" --repo "$GITHUB_REPOSITORY" --body "$title"$'\n\n'"$body"
+          else
+            gh label create sync --repo "$GITHUB_REPOSITORY" --color B60205 2>/dev/null || true
+            gh issue create --repo "$GITHUB_REPOSITORY" --label sync --title "$title" --body "$body"
+          fi
