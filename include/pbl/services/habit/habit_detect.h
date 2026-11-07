@@ -100,6 +100,16 @@ void habit_detect_init(HabitDetector *d, const HabitConfig *cfg);
 HabitEvent habit_detect_feed(HabitDetector *d, uint32_t t_ms, const HabitVec *accel,
                              const HabitVec *gyro, bool vibrating, HabitEpisode *out);
 
+//! Feed one gyroscope sample (0.1 deg/s) when the gyro runs separately from the accelerometer
+//! (at the same rate); `vibrating` as for habit_detect_feed().
+void habit_detect_feed_gyro(HabitDetector *d, const HabitVec *gyro, bool vibrating);
+
+//! The gyro was turned off: forget its level until it runs again.
+void habit_detect_gyro_off(HabitDetector *d);
+
+//! True when the hand is at, or on its way into, an episode (where the gyro helps).
+bool habit_detect_wants_gyro(const HabitDetector *d);
+
 //! The region the current gravity direction matches (or None), for calibration UIs and logging.
 HabitRegion habit_detect_current_region(const HabitDetector *d);
 

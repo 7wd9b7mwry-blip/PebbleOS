@@ -6,6 +6,8 @@
 #include <string.h>
 
 #include <pbl/cron/cron.h>
+#include <pbl/drivers/gyro.h>
+#include <pbl/kernel/mutex.h>
 #include <pbl/kernel/time.h>
 #include <pbl/logging/logging.h>
 #include <pbl/services/activity/activity.h>
@@ -34,6 +36,8 @@ PBL_LOG_MODULE_DEFINE(service_habit, CONFIG_SERVICE_HABIT_LOG_LEVEL);
 #define HR_FRESH_MS (3 * 60 * 1000)
 #define MIN_HR_CONFIDENCE 50
 #define MIN_PPI_CONFIDENCE 60
+#define GYRO_BUF 64             // > 2 s at 26 Hz
+#define GYRO_OFF_AFTER_MS 10000 // hand away from the head this long: gyro off again
 
 // All state is owned by KernelBG: callbacks from other tasks hop onto it.
 static struct {
@@ -62,9 +66,54 @@ static struct {
   uint16_t ppi_n;
   HRMSessionRef hrm;
   DataLoggingSession *dls;
+  // gyro: on only while the hand is at (or heading into) an episode
+  bool gyro_on;
+  uint64_t gyro_wanted_at_ms;
   // counters
   uint32_t episodes, alerts, smart_vibes;
 } s;
+
+// gyro samples from the IMU driver's work context, drained on KernelBG
+static PBL_MUTEX_DEFINE(s_gyro_mutex);
+static GyroSample s_gyro_buf[GYRO_BUF];
+static size_t s_gyro_n;
+
+void pbl_gyro_samples_cb(const GyroSample *samples, size_t num_samples) {
+  pbl_mutex_lock(&s_gyro_mutex, PBL_FOREVER);
+  for (size_t i = 0; i < num_samples; i++) {
+    if (s_gyro_n < GYRO_BUF) {
+      s_gyro_buf[s_gyro_n++] = samples[i];
+    }
+  }
+  pbl_mutex_unlock(&s_gyro_mutex);
+}
+
+static void prv_gyro_drain(bool vibrating) {
+  GyroSample buf[GYRO_BUF];
+  pbl_mutex_lock(&s_gyro_mutex, PBL_FOREVER);
+  const size_t n = s_gyro_n;
+  memcpy(buf, s_gyro_buf, n * sizeof(GyroSample));
+  s_gyro_n = 0;
+  pbl_mutex_unlock(&s_gyro_mutex);
+  for (size_t i = 0; i < n; i++) {
+    const HabitVec g = {buf[i].x, buf[i].y, buf[i].z};
+    habit_detect_feed_gyro(&s.det, &g, vibrating);
+  }
+}
+
+static void prv_gyro_update(void) {
+  const uint64_t now = pbl_uptime_ms();
+  if (habit_detect_wants_gyro(&s.det)) {
+    s.gyro_wanted_at_ms = now;
+    if (!s.gyro_on && pbl_gyro_set_enabled(true) == 0) {
+      s.gyro_on = true;
+    }
+  } else if (s.gyro_on && now - s.gyro_wanted_at_ms > GYRO_OFF_AFTER_MS) {
+    pbl_gyro_set_enabled(false);
+    s.gyro_on = false;
+    habit_detect_gyro_off(&s.det);
+  }
+}
 
 // ---- logging ----------------------------------------------------------------------------------
 
@@ -152,6 +201,7 @@ static void prv_stop(void) {
 // ---- sensing ----------------------------------------------------------------------------------
 
 static void prv_accel_cb(AccelData *data, uint32_t num_samples) {
+  prv_gyro_drain(num_samples > 0 && data[0].did_vibrate);
   for (uint32_t i = 0; i < num_samples; i++) {
     const HabitVec a = {data[i].x, data[i].y, data[i].z};
     HabitEpisode ep;
@@ -178,6 +228,7 @@ static void prv_accel_cb(AccelData *data, uint32_t num_samples) {
   habit_detect_levels(&s.det, NULL, NULL, &fine, NULL);
   s.motion_sum += fine;
   s.motion_n++;
+  prv_gyro_update();
 }
 
 static void prv_hrm_cb(PebbleHRMEvent *e, void *context) {
@@ -299,6 +350,11 @@ static void prv_stop_kbg(void *unused) {
   if (s.hrm != HRM_INVALID_SESSION_REF) {
     sys_hrm_manager_unsubscribe(s.hrm);
     s.hrm = HRM_INVALID_SESSION_REF;
+  }
+  if (s.gyro_on) {
+    pbl_gyro_set_enabled(false);
+    s.gyro_on = false;
+    habit_detect_gyro_off(&s.det);
   }
   accel_session_data_unsubscribe(s.accel);
   accel_session_delete(s.accel);

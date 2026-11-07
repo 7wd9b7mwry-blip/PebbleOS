@@ -47,3 +47,8 @@ pbl_clar_test(test_flash_partition
     tests/fakes/fake_spi_flash.c
     tests/fw/drivers/flash_partitions_single_slot.c
 )
+
+pbl_clar_test(test_lsm6dso_fifo
+  SOURCES
+    drivers/imu/lsm6dso/lsm6dso_fifo.c
+)

@@ -185,3 +185,25 @@ void test_habit_detect__arm_down_matches_nothing(void) {
   cl_assert_equal_i(habit_detect_current_region(&s_d), HabitRegion_None);
   cl_assert_equal_s(habit_region_name(HabitRegion_Hair), "hair");
 }
+
+void test_habit_detect__separate_gyro_feed(void) {
+  // the service feeds the gyro on its own (drained from the driver), at the same rate
+  prv_move(ARM_DESK, HAND_FACE, 600);
+  prv_run(HAND_FACE, 1000, 2, 4, -1, false);  // the gravity estimate settles
+  cl_assert(habit_detect_wants_gyro(&s_d));
+  for (int i = 0; i < 8000 / DT_MS; i++) {
+    const float ph = 2.0f * 3.14159265f * 4.0f * (s_t / 1000.0f);
+    const HabitVec g = {(int16_t)(400 * sinf(ph)), (int16_t)(400 * cosf(ph)), 0};
+    habit_detect_feed_gyro(&s_d, &g, false);
+    prv_run(HAND_FACE, DT_MS, 2, 4, -1, false);
+  }
+  cl_assert_equal_i(s_starts, 1);
+  // gyro off: its level is forgotten, the still hand alone starts nothing new
+  habit_detect_gyro_off(&s_d);
+  prv_move(HAND_FACE, ARM_DESK, 600);
+  prv_run(ARM_DESK, 5000, 3, 2, -1, false);
+  cl_assert(!habit_detect_wants_gyro(&s_d));
+  prv_move(ARM_DESK, HAND_FACE, 600);
+  prv_run(HAND_FACE, 8000, 2, 4, -1, false);
+  cl_assert_equal_i(s_starts, 1);
+}

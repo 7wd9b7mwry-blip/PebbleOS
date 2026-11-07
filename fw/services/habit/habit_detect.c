@@ -239,6 +239,25 @@ HabitEvent habit_detect_feed(HabitDetector *d, uint32_t t_ms, const HabitVec *ac
   return HabitEvent_None;
 }
 
+void habit_detect_feed_gyro(HabitDetector *d, const HabitVec *gyro, bool vibrating) {
+  if (vibrating) {
+    return;
+  }
+  const int32_t gmag = (abs(gyro->x) + abs(gyro->y) + abs(gyro->z)) * FX;
+  d->gyro_fine = d->have_gyro ? prv_lp(d->gyro_fine, gmag, prv_div(FINE_TAU_MS, d->cfg.sample_hz))
+                              : gmag;
+  d->have_gyro = true;
+}
+
+void habit_detect_gyro_off(HabitDetector *d) {
+  d->have_gyro = false;
+  d->gyro_fine = 0;
+}
+
+bool habit_detect_wants_gyro(const HabitDetector *d) {
+  return d->state != HabitState_Idle || habit_detect_current_region(d) != HabitRegion_None;
+}
+
 HabitRegion habit_detect_current_region(const HabitDetector *d) {
   return prv_gravity_sane(d) ? prv_match(d, NULL) : HabitRegion_None;
 }

@@ -1,6 +1,8 @@
 /* SPDX-FileCopyrightText: 2026 Core Devices LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
+#include <pbl/drivers/gyro.h>
+#include <pbl/drivers/imu/lsm6dso/lsm6dso_fifo.h>
 #include <errno.h>
 
 #include <pbl/drivers/accel.h>
@@ -24,15 +26,24 @@ PBL_LOG_MODULE_DEFINE(driver_accel_lsm6dso, CONFIG_DRIVER_IMU_LOG_LEVEL);
 // The single instance, for interrupt and timer contexts
 static const struct pbl_lsm6dso *s_dev;
 
+// Gyroscope requested by a kernel client, and samples still to discard after power-on
+static bool s_gyro_enabled;
+static uint8_t s_gyro_discard;
+static uint8_t s_gyro_raw[LSM6DSO_FIFO_SIZE * 6U];
+static GyroSample s_gyro_samples[LSM6DSO_FIFO_SIZE];
+
+__attribute__((weak)) void pbl_gyro_samples_cb(const GyroSample *samples, size_t num_samples) {}
+
 // Implementation notes:
 //
-// - Gyroscope is unused; only the accelerometer is configured.
+// - Gyroscope: off unless a kernel client enables it (pbl_gyro_set_enabled). It then runs at
+//   the accelerometer's ODR, 250 dps full scale, batched in the same FIFO; words are split by
+//   their tag (lsm6dso_fifo_split). ULP mode requires the gyroscope off, so enabling it leaves
+//   ULP for the low-power mode (high-performance disabled) and disabling it returns to ULP;
+//   XL_ULP_EN is only toggled with the accelerometer powered down, as the datasheet requires.
 // - Peeking returns the last FIFO sample when sampling is active, otherwise a
 //   single-shot measurement is performed.
-// - Ultra-low-power mode (XL_ULP_EN) is always used (minimum power). It is
-//   enabled once at init while the accelerometer is powered down (as required
-//   by the datasheet) and never toggled afterwards. The gyroscope is never
-//   enabled, so ULP is allowed.
+// - Ultra-low-power mode (XL_ULP_EN) is used whenever the gyroscope is off (minimum power).
 // - ODR is limited to the [12.5, 208] Hz range (the ULP ODR range).
 // - Shake detection uses 12.5Hz when no active sampling is ongoing.
 // - Wake-up duration absolute time depends on the ODR, a parameter that can
@@ -80,8 +91,11 @@ static const struct pbl_lsm6dso *s_dev;
 #define LSM6DSO_INT1_CTRL         0x0DU
 #define LSM6DSO_WHO_AM_I          0x0FU
 #define LSM6DSO_CTRL1_XL          0x10U
+#define LSM6DSO_CTRL2_G           0x11U
 #define LSM6DSO_CTRL3_C           0x12U
 #define LSM6DSO_CTRL5_C           0x14U
+#define LSM6DSO_CTRL6_C           0x15U
+#define LSM6DSO_CTRL7_G           0x16U
 #define LSM6DSO_CTRL9_XL          0x18U
 #define LSM6DSO_ALL_INT_SRC       0x1AU
 #define LSM6DSO_WAKE_UP_SRC       0x1BU
@@ -121,6 +135,19 @@ static const struct pbl_lsm6dso *s_dev;
 // CTRL5_C fields
 #define LSM6DSO_CTRL5_C_XL_ULP_EN PBL_BIT(7)
 
+// CTRL2_G fields (ODR codes 1-5 are the accelerometer's: 12.5-208 Hz; FS 00 = 250 dps)
+#define LSM6DSO_CTRL2_G_ODR_MASK PBL_GENMASK(7, 4)
+
+// CTRL6_C / CTRL7_G fields: high-performance mode disabled (low-power / normal modes)
+#define LSM6DSO_CTRL6_C_XL_HM_MODE PBL_BIT(4)
+#define LSM6DSO_CTRL7_G_G_HM_MODE  PBL_BIT(7)
+
+// Gyroscope: 8.75 mdps/LSB at 250 dps = 7/80 of 0.1 dps; samples discarded after power-on
+// (turn-on time ~70 ms plus a few samples)
+#define LSM6DSO_GYRO_SCALE_NUM 7
+#define LSM6DSO_GYRO_SCALE_DEN 80
+#define LSM6DSO_GYRO_DISCARD_SAMPLES 3U
+
 // CTRL9_XL fields
 #define LSM6DSO_CTRL9_XL_I3C_DISABLE PBL_BIT(1)
 
@@ -141,6 +168,7 @@ static const struct pbl_lsm6dso *s_dev;
 
 // FIFO_CTRL3 fields
 #define LSM6DSO_FIFO_CTRL3_BDR_XL_MASK  PBL_GENMASK(3, 0)
+#define LSM6DSO_FIFO_CTRL3_BDR_GY_MASK  PBL_GENMASK(7, 4)
 #define LSM6DSO_FIFO_CTRL3_BDR_XL_12HZ5 0x1U
 #define LSM6DSO_FIFO_CTRL3_BDR_XL_26HZ  0x2U
 #define LSM6DSO_FIFO_CTRL3_BDR_XL_52HZ  0x3U
@@ -245,7 +273,37 @@ static uint64_t prv_get_curr_system_time_us(void) {
 
 // Convert and dispatch the samples already sitting in raw_sample_buf. Kept free of
 // device I/O so it can run after the I2C reads instead of in between them.
+static int16_t prv_gyro_axis(IMUCoordinateAxis axis, const uint8_t *raw) {
+  int32_t val = s_dev->axis_dir[axis] * (int32_t)prv_raw_to_s16(&raw[s_dev->axis_map[axis] * 2U]);
+  if (s_dev->state->rotated && (axis == AXIS_X || axis == AXIS_Y)) {
+    val = -val;
+  }
+  return (int16_t)(val * LSM6DSO_GYRO_SCALE_NUM / LSM6DSO_GYRO_SCALE_DEN);
+}
+
 static void prv_lsm6dso_process_samples(uint16_t num_samples, uint64_t timestamp_us) {
+  size_t num_gyro = 0;
+  num_samples = (uint16_t)lsm6dso_fifo_split(s_dev->state->raw_sample_buf, num_samples,
+                                             s_gyro_raw, LSM6DSO_FIFO_SIZE, &num_gyro);
+  if (num_gyro > 0U) {
+    size_t n = 0;
+    for (size_t i = 0; i < num_gyro; i++) {
+      if (s_gyro_discard > 0U) {
+        s_gyro_discard--;
+        continue;
+      }
+      const uint8_t *raw = &s_gyro_raw[i * 6U];
+      s_gyro_samples[n++] = (GyroSample){prv_gyro_axis(AXIS_X, raw), prv_gyro_axis(AXIS_Y, raw),
+                                         prv_gyro_axis(AXIS_Z, raw)};
+    }
+    if (n > 0U) {
+      pbl_gyro_samples_cb(s_gyro_samples, n);
+    }
+  }
+  if (num_samples == 0U) {
+    return;
+  }
+
   // Each FIFO word is a tag byte followed by 6 data bytes; point the batch at the
   // first data byte and let the service step over the tags via the stride.
   int8_t rotate = s_dev->state->rotated ? -1 : 1;
@@ -319,6 +377,10 @@ static bool prv_lsm6dso_enable_fifo(uint16_t num_samples) {
   // Accelerometer batch data rate (gyro left not batched)
   val = PBL_FIELD_PREP(LSM6DSO_FIFO_CTRL3_BDR_XL_MASK,
                        prv_get_bdr(s_dev->state->sampling_interval_us));
+  if (s_gyro_enabled) {
+    val |= PBL_FIELD_PREP(LSM6DSO_FIFO_CTRL3_BDR_GY_MASK,
+                          prv_get_bdr(s_dev->state->sampling_interval_us));
+  }
   ret = prv_lsm6dso_write(LSM6DSO_FIFO_CTRL3, &val, 1);
   if (!ret) {
     PBL_LOG_ERR("Could not write FIFO_CTRL3 register");
@@ -512,6 +574,76 @@ static void prv_queue_work_from_isr(void (*work)(void)) {
   new_timer_add_work_callback_from_isr(prv_work_cb, (void *)work);
 }
 
+static bool s_gyro_target;
+
+static bool prv_update_bits(uint8_t reg, uint8_t mask, uint8_t bits) {
+  uint8_t v;
+  if (!prv_lsm6dso_read(reg, &v, 1)) {
+    return false;
+  }
+  v = (uint8_t)((v & ~mask) | (bits & mask));
+  return prv_lsm6dso_write(reg, &v, 1);
+}
+
+static void prv_gyro_apply_work_cb(void) {
+  const bool enable = s_gyro_target;
+  if (enable == s_gyro_enabled) {
+    return;
+  }
+  uint8_t ctrl1;
+  if (!prv_lsm6dso_read(LSM6DSO_CTRL1_XL, &ctrl1, 1)) {
+    PBL_LOG_ERR("Could not read CTRL1_XL register");
+    return;
+  }
+  const uint8_t odr = PBL_FIELD_GET(LSM6DSO_CTRL1_XL_ODR_MASK, ctrl1);
+  bool ok = true;
+  if (enable) {
+    // accel powered down while leaving ULP; then low-power (not high-performance) modes
+    uint8_t off = PBL_FIELD_PREP(LSM6DSO_CTRL1_XL_ODR_MASK, LSM6DSO_CTRL1_XL_ODR_OFF) |
+                  prv_fs_bits();
+    ok &= prv_lsm6dso_write(LSM6DSO_CTRL1_XL, &off, 1);
+    ok &= prv_update_bits(LSM6DSO_CTRL5_C, LSM6DSO_CTRL5_C_XL_ULP_EN, 0);
+    ok &= prv_update_bits(LSM6DSO_CTRL6_C, LSM6DSO_CTRL6_C_XL_HM_MODE, LSM6DSO_CTRL6_C_XL_HM_MODE);
+    ok &= prv_update_bits(LSM6DSO_CTRL7_G, LSM6DSO_CTRL7_G_G_HM_MODE, LSM6DSO_CTRL7_G_G_HM_MODE);
+    ok &= prv_lsm6dso_write(LSM6DSO_CTRL1_XL, &ctrl1, 1);
+    uint8_t g = PBL_FIELD_PREP(LSM6DSO_CTRL2_G_ODR_MASK, odr);
+    ok &= prv_lsm6dso_write(LSM6DSO_CTRL2_G, &g, 1);
+    s_gyro_discard = LSM6DSO_GYRO_DISCARD_SAMPLES;
+    s_gyro_enabled = true;
+  } else {
+    uint8_t g = 0;
+    ok &= prv_lsm6dso_write(LSM6DSO_CTRL2_G, &g, 1);
+    s_gyro_enabled = false;
+    uint8_t off = PBL_FIELD_PREP(LSM6DSO_CTRL1_XL_ODR_MASK, LSM6DSO_CTRL1_XL_ODR_OFF) |
+                  prv_fs_bits();
+    ok &= prv_lsm6dso_write(LSM6DSO_CTRL1_XL, &off, 1);
+    ok &= prv_update_bits(LSM6DSO_CTRL5_C, LSM6DSO_CTRL5_C_XL_ULP_EN, LSM6DSO_CTRL5_C_XL_ULP_EN);
+    ok &= prv_lsm6dso_write(LSM6DSO_CTRL1_XL, &ctrl1, 1);
+  }
+  // batch the gyroscope in the FIFO (or stop), at the accelerometer's batch rate
+  if (s_dev->state->sampling_interval_us > 0U) {
+    ok &= prv_update_bits(
+        LSM6DSO_FIFO_CTRL3, LSM6DSO_FIFO_CTRL3_BDR_GY_MASK,
+        enable ? PBL_FIELD_PREP(LSM6DSO_FIFO_CTRL3_BDR_GY_MASK,
+                                prv_get_bdr(s_dev->state->sampling_interval_us))
+               : 0);
+  }
+  if (!ok) {
+    PBL_LOG_ERR("Gyroscope %s failed", enable ? "enable" : "disable");
+  } else {
+    PBL_LOG_INFO("Gyroscope %s", enable ? "on" : "off");
+  }
+}
+
+int pbl_gyro_set_enabled(bool enable) {
+  if (s_dev == NULL) {
+    return -ENODEV;
+  }
+  s_gyro_target = enable;
+  prv_queue_work(prv_gyro_apply_work_cb);
+  return 0;
+}
+
 static void prv_lsm6dso_int1_work_handler(void) {
   bool fifo_progress = false;
   // Best-effort pass tagging: an ISR enqueue racing a pending requeue gets
@@ -600,6 +732,14 @@ static bool prv_configure_odr(uint32_t sampling_interval_us, bool shake_detectio
   ret = prv_lsm6dso_write(LSM6DSO_CTRL1_XL, &val, 1);
   if (!ret) {
     return ret;
+  }
+
+  if (s_gyro_enabled) {
+    uint8_t g = PBL_FIELD_PREP(LSM6DSO_CTRL2_G_ODR_MASK, odr);
+    if (!prv_lsm6dso_write(LSM6DSO_CTRL2_G, &g, 1)) {
+      PBL_LOG_ERR("Could not write CTRL2_G register");
+    }
+    s_gyro_discard = LSM6DSO_GYRO_DISCARD_SAMPLES;
   }
 
   // Allow the accelerometer to stabilize after an ODR/power-mode change
