@@ -129,10 +129,11 @@ void habit_detect_default_config(HabitConfig *cfg) {
   memset(cfg, 0, sizeof(*cfg));
   cfg->sample_hz = 25;
   // Left wrist, Pebble axes: +x toward 3 o'clock (the hand), +y toward 12, +z out of the screen.
-  // The accelerometer reads +1 g "up", so a raised forearm (hand at the head) reads +x. Until the
-  // wearer calibrates each region, one generic "hand at the head" region is used.
+  // Pebble reports the direction of gravity (flat, screen up: z = -1000), so a raised forearm
+  // (hand at the head) reads -x. Until the wearer calibrates each region, one generic "hand at
+  // the head" region is used.
   cfg->regions[HabitRegion_Face] = (HabitRegionProto){
-      .enabled = true, .gravity = {.x = 1000, .y = 0, .z = 0}, .cos_min_x1000 = 766};  // 40 deg
+      .enabled = true, .gravity = {.x = -1000, .y = 0, .z = 0}, .cos_min_x1000 = 766};  // 40 deg
   cfg->min_dwell_ms = 3000;
   cfg->release_ms = 1500;
   cfg->min_fine_mg = 15;

@@ -12,6 +12,11 @@ on:
   schedule:
     - cron: '23 9 * * *'   # 09:23 UTC daily
   workflow_dispatch:
+    inputs:
+      verify:
+        description: Run the tests and builds even when custom is already up to date
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -63,7 +68,7 @@ jobs:
           fi
 
       - name: Submodules and Python dependencies
-        if: steps.merge.outputs.result == 'merged'
+        if: steps.merge.outputs.result == 'merged' || inputs.verify
         run: |
           git submodule update --init --recursive
           pip install -U pip
@@ -71,12 +76,12 @@ jobs:
 
       - name: Unit tests (ours)
         id: test
-        if: steps.merge.outputs.result == 'merged'
+        if: steps.merge.outputs.result == 'merged' || inputs.verify
         run: pbl test -R 'habit|gyro|beacon' --output-on-failure
 
       - name: Build Pebble Time 2 (obelix pvt) and emulator firmware
         id: build
-        if: steps.merge.outputs.result == 'merged'
+        if: steps.merge.outputs.result == 'merged' || inputs.verify
         run: |
           pbl configure -b build-obelix --board obelix@pvt -DCONFIG_FIRMWARE_SLOT=0
           pbl build -b build-obelix

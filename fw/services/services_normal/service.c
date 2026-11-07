@@ -15,6 +15,9 @@
 #include <pbl/services/blob_db/endpoint_private.h>
 #include <pbl/services/clock.h>
 #include <pbl/services/data_logging/data_logging_service.h>
+#ifdef CONFIG_SERVICE_HABIT
+#include <pbl/services/habit/habit_service.h>
+#endif
 #include <pbl/services/mic_capture.h>
 #include <pbl/services/mic_manager.h>
 #include <pbl/services/mic_stream.h>
@@ -143,6 +146,10 @@ void services_normal_init(void) {
 #endif
 
   app_glance_service_init();
+
+#ifdef CONFIG_SERVICE_HABIT
+  habit_service_init();
+#endif
 }
 
 static struct ServiceRunLevelSetting s_runlevel_settings[] = {
@@ -158,6 +165,12 @@ static struct ServiceRunLevelSetting s_runlevel_settings[] = {
     .set_enable_fn = activity_set_enabled,
     .enable_mask = R_Stationary | R_Normal,
   },
+#ifdef CONFIG_SERVICE_HABIT
+  {
+    .set_enable_fn = habit_service_set_enabled,
+    .enable_mask = R_Stationary | R_Normal,
+  },
+#endif
   {
     .set_enable_fn = stationary_run_level_enable,
     .enable_mask = R_Stationary | R_Normal,

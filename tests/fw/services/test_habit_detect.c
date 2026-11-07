@@ -17,10 +17,11 @@ typedef struct {
   float x, y, z;
 } V3;
 
-static const V3 ARM_DOWN = {-1.0f, 0.0f, 0.0f};    // hanging, hand down
-static const V3 ARM_DESK = {0.0f, 0.0f, 1.0f};     // flat, screen up (typing)
-static const V3 HAND_FACE = {0.94f, 0.0f, 0.34f};  // forearm raised ~70 deg
-static const V3 HAND_HAIR = {0.5f, -0.85f, 0.15f}; // elbow lifted, wrist rotated
+// Pebble reports the direction of gravity: flat with the screen up reads z = -1 g.
+static const V3 ARM_DOWN = {1.0f, 0.0f, 0.0f};      // hanging, hand down
+static const V3 ARM_DESK = {0.0f, 0.0f, -1.0f};     // flat, screen up (typing)
+static const V3 HAND_FACE = {-0.94f, 0.0f, -0.34f}; // forearm raised ~70 deg
+static const V3 HAND_HAIR = {-0.5f, 0.85f, -0.15f}; // elbow lifted, wrist rotated
 
 static HabitDetector s_d;
 static uint32_t s_t;

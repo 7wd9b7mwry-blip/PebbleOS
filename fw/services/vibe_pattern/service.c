@@ -330,8 +330,16 @@ uint32_t vibes_get_time_since_last_vibe_ms(void) {
   return (elapsed_ms > UINT32_MAX) ? UINT32_MAX : (uint32_t)elapsed_ms;
 }
 
+static void prv_clear_pattern_locked(void);
+
 bool prv_vibe_pattern_enqueue_step_raw(uint32_t duration_ms, int32_t strength) {
   pbl_mutex_lock(&s_vibe_pattern_mutex, PBL_FOREVER);
+
+  // the habit service's streamed programs give way to every other vibe
+  if (s_pattern_owner == VibePatternOwner_Habit &&
+      (s_vibe_queue_head != nullptr || s_pattern_in_progress)) {
+    prv_clear_pattern_locked();
+  }
 
   if (s_pattern_in_progress ||
       list_count((ListNode *)s_vibe_queue_head) >= CONFIG_SERVICE_VIBE_PATTERN_MAX_STEPS) {
@@ -471,6 +479,48 @@ void vibe_pattern_clear_for_owner(VibePatternOwner owner) {
     prv_clear_pattern_locked();
   }
   pbl_mutex_unlock(&s_vibe_pattern_mutex);
+}
+
+bool vibe_pattern_stream_step(VibePatternOwner owner, uint32_t duration_ms, int32_t strength) {
+  pbl_mutex_lock(&s_vibe_pattern_mutex, PBL_FOREVER);
+  const bool idle = (s_vibe_queue_head == nullptr && !s_pattern_in_progress);
+  if ((!idle && s_pattern_owner != owner) ||
+      list_count((ListNode *)s_vibe_queue_head) >= CONFIG_SERVICE_VIBE_PATTERN_MAX_STEPS) {
+    pbl_mutex_unlock(&s_vibe_pattern_mutex);
+    return false;
+  }
+  VibePatternStep *step = pbl_malloc(sizeof(VibePatternStep));
+  if (step == nullptr) {
+    pbl_mutex_unlock(&s_vibe_pattern_mutex);
+    return false;
+  }
+  list_init((ListNode *)step);
+  step->duration_ms = MIN(duration_ms, MAX_VIBE_DURATION_MS);
+  step->strength = CLIP(strength, VIBE_STRENGTH_MIN, VIBE_STRENGTH_MAX);
+  if (idle) {
+    s_pattern_owner = owner;
+    s_vibe_queue_head = step;
+    s_pattern_start_ticks = pbl_uptime_ticks();
+    s_pattern_deadline_ms = 0;
+    prv_vibes_set_vibe_strength(step->strength);
+    s_pattern_in_progress = true;
+    const uint32_t first_ms = prv_next_timeout_ms(step->duration_ms);
+    bool success =
+        new_timer_start(s_pattern_timer, first_ms, prv_timer_callback, nullptr, 0 /*flags*/);
+    PBL_ASSERTN(success);
+  } else {
+    list_append((ListNode *)s_vibe_queue_head, (ListNode *)step);
+  }
+  pbl_mutex_unlock(&s_vibe_pattern_mutex);
+  return true;
+}
+
+bool vibe_pattern_is_owned_by(VibePatternOwner owner) {
+  pbl_mutex_lock(&s_vibe_pattern_mutex, PBL_FOREVER);
+  const bool owned =
+      (s_vibe_queue_head != nullptr || s_pattern_in_progress) && s_pattern_owner == owner;
+  pbl_mutex_unlock(&s_vibe_pattern_mutex);
+  return owned;
 }
 
 void pbl_analytics_external_collect_vibe_stats(void) {
