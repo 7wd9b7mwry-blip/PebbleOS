@@ -18,15 +18,16 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import train  # noqa: E402
 
 ap = argparse.ArgumentParser()
-ap.add_argument("--source", choices=["cmi", "synthetic"], required=True)
+ap.add_argument("--source", required=True)
+ap.add_argument("--stressense")
+ap.add_argument("--stressense-hz", type=float, default=50.0)
 ap.add_argument("--data")
 ap.add_argument("--src-hz", type=float, default=10.0)
 ap.add_argument("--features-cli", required=True)
 ap.add_argument("--out", required=True)
 args = ap.parse_args()
 
-seqs, _ = (train.load_cmi(args.data, args.src_hz) if args.source == "cmi"
-           else train.load_synthetic())
+seqs, _ = train.load_sources(args)
 c = train.run_features(seqs, args.features_cli)
 py = pd.read_csv(os.path.join(args.out, "py_scores.csv"), dtype={"seq": str})
 m = py.merge(c[["seq", "end", "score"]], on=["seq", "end"], how="left")

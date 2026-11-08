@@ -9,6 +9,13 @@ the watch scores exactly what was trained. Sources:
                                cheek / neck pinching) against 10 look-alikes (drinking, glasses,
                                phone, waving, ...). Used at its ~10 Hz (the classifier's rate), in mG and 0.1 deg/s; the
                                rotation rate is derived from the orientation quaternions.
+  --source stressense --stressense FILE
+                               StresSense (Mendeley Data 2dn3hpbm5m, CC BY 4.0): 40 people, wrist
+                               phone IMU at ~50 Hz (estimated: no timestamps finer than 10 s),
+                               nail biting against eating, smoking and staying still; face
+                               touching is left out of training (touching is not picking). Each
+                               user-activity recording is one sequence, all of it labelled.
+  --source cmi,stressense      Several sources together (subjects kept apart per source).
   --source synthetic           Generated sequences, to check the pipeline end to end.
 
 Windows are labelled from the gesture phase: a window mostly inside a BFRB gesture is positive,
@@ -92,6 +99,39 @@ def load_cmi(data_dir, src_hz):
                            gesture=str(g["gesture"].iloc[0]), target=target,
                            orientation=str(g.get("orientation", pd.Series(["?"])).iloc[0]),
                            phase=phase))
+    return seqs, labels
+
+
+def bin_average(x, src_hz, dst_hz=HZ):
+    """Average into 1/dst_hz bins, as the watch does with its 25 Hz samples (habit_detect)."""
+    t = np.arange(len(x)) / src_hz
+    b = np.floor(t * dst_hz).astype(int)
+    n = b[-1] + 1 if len(b) else 0
+    out = np.zeros((n, x.shape[1]))
+    cnt = np.bincount(b, minlength=n)[:, None]
+    for i in range(x.shape[1]):
+        out[:, i] = np.bincount(b, weights=x[:, i], minlength=n)
+    return out / np.maximum(cnt, 1)
+
+
+STRESSENSE_POSITIVE = {"Nail_Biting"}
+STRESSENSE_EXCLUDED = {"Face_Touch"}
+
+
+def load_stressense(path, src_hz=50.0):
+    df = pd.read_csv(path)
+    seqs, labels = [], []
+    for (user, act), g in df.groupby(["User", "Activity"], sort=False):
+        if act in STRESSENSE_EXCLUDED:
+            continue
+        acc = g[["Ax", "Ay", "Az"]].to_numpy(float) * 1000 / G
+        gyro = np.degrees(g[["Gx", "Gy", "Gz"]].to_numpy(float)) * 10  # rad/s -> 0.1 deg/s
+        x = bin_average(np.hstack([acc, gyro]), src_hz)
+        seq = f"ss_{user}_{act}"
+        phase = np.array(["Performs gesture"] * len(x))
+        seqs.append((seq, x, True))
+        labels.append(dict(seq=seq, subject=f"ss_{user}", gesture=f"StresSense {act}",
+                           target=act in STRESSENSE_POSITIVE, orientation="?", phase=phase))
     return seqs, labels
 
 
@@ -262,9 +302,28 @@ def export_c(model, threshold_prob, version, path):
     return len(nodes), len(roots)
 
 
+def load_sources(args):
+    seqs, labels = [], []
+    for src in args.source.split(","):
+        if src == "cmi":
+            s_, l_ = load_cmi(args.data, args.src_hz)
+        elif src == "stressense":
+            s_, l_ = load_stressense(args.stressense, args.stressense_hz)
+        elif src == "synthetic":
+            s_, l_ = load_synthetic()
+        else:
+            raise SystemExit(f"unknown source {src}")
+        seqs += s_
+        labels += l_
+    return seqs, labels
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--source", choices=["cmi", "synthetic"], required=True)
+    ap.add_argument("--source", required=True,
+                    help="cmi, stressense, synthetic, or several separated by commas")
+    ap.add_argument("--stressense", help="StresSense stresSense.csv")
+    ap.add_argument("--stressense-hz", type=float, default=50.0)
     ap.add_argument("--data")
     ap.add_argument("--src-hz", type=float, default=10.0, help="CMI IMU sample rate")
     ap.add_argument("--features-cli", required=True, help="habit_features host binary")
@@ -279,8 +338,7 @@ def main():
                          "hand-at-the-head stage already rules out)")
     args = ap.parse_args()
 
-    seqs, labels = (load_cmi(args.data, args.src_hz) if args.source == "cmi"
-                    else load_synthetic())
+    seqs, labels = load_sources(args)
     print(f"{len(seqs)} sequences", file=sys.stderr)
     feat = run_features(seqs, args.features_cli)
     df = label_windows(feat, labels)

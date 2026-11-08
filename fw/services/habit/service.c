@@ -14,6 +14,7 @@
 #include <pbl/services/battery/battery_state.h>
 #include <pbl/services/data_logging/data_logging_service.h>
 #include <pbl/services/habit/habit_features.h>
+#include <pbl/services/habit/habit_model.h>
 #include <pbl/services/habit/habit_policy.h>
 #include <pbl/services/habit/sound_level.h>
 #ifdef CONFIG_SERVICE_MIC_MANAGER
@@ -122,6 +123,7 @@ static const char KEY_SLEEP_ALERTS[] = "sleep_alerts";
 static const char KEY_BASELINES[] = "baselines";
 static const char KEY_BEACON[] = "beacon";
 static const char KEY_SOUND[] = "sound";
+static const char KEY_MODEL[] = "model";
 
 static bool prv_settings_get(const char *key, void *val, size_t len) {
   struct pbl_settings_file file;
@@ -188,6 +190,9 @@ static void prv_load_settings(void) {
   }
   if (prv_settings_get(KEY_SOUND, &v, 1)) {
     s.sound = v != 0;
+  }
+  if (prv_settings_get(KEY_MODEL, &v, 1)) {
+    s.det.cfg.use_model = v != 0;
   }
   BaselinesRecord b;
   if (prv_settings_get(KEY_BASELINES, &b, sizeof(b)) && b.version == SETTINGS_VERSION) {
@@ -738,6 +743,17 @@ void habit_service_set_sound(bool on) {
   system_task_add_callback(prv_set_sound_kbg, (void *)(uintptr_t)on);
 }
 
+static void prv_set_model_kbg(void *on) {
+  prv_load_settings();
+  s.det.cfg.use_model = on != NULL;
+  const uint8_t v = on ? 1 : 0;
+  prv_settings_set(KEY_MODEL, &v, 1);
+}
+
+void habit_service_set_model(bool on) {
+  system_task_add_callback(prv_set_model_kbg, (void *)(uintptr_t)on);
+}
+
 void habit_service_calibrate(HabitRegion region) {
   system_task_add_callback(prv_calibrate_kbg, (void *)(uintptr_t)region);
 }
@@ -769,4 +785,8 @@ void habit_service_get_status(HabitServiceStatus *st) {
   st->sound = s.sound;
   st->sound_rms_db10 = s.sound_rms_db10;
   st->sound_peak_db10 = s.sound_peak_db10;
+  st->model = s.det.cfg.use_model;
+  st->model_version = g_habit_model.version;
+  st->model_score = s.det.model_score;
+  st->model_threshold = s.det.cfg.model_threshold;
 }

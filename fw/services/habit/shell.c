@@ -22,6 +22,8 @@ static int prv_cmd_status(const struct pbl_shell *sh, size_t argc, char **argv) 
   pbl_shell_print(sh, "vibrate %d, alerts while asleep %d, calibrated 0x%02x", st.vibrate,
                   st.alerts_while_asleep, st.regions_calibrated);
   pbl_shell_print(sh, "beacon %d (airing %d)", st.beacon, st.beacon_airing);
+  pbl_shell_print(sh, "model %d (%s): last score %ld, threshold %ld", st.model, st.model_version,
+                  (long)st.model_score, (long)st.model_threshold);
   pbl_shell_print(sh, "sound %d: last minute RMS %d.%d dBFS, peak %d.%d dBFS", st.sound,
                   st.sound_rms_db10 / 10, abs(st.sound_rms_db10 % 10), st.sound_peak_db10 / 10,
                   abs(st.sound_peak_db10 % 10));
@@ -130,6 +132,15 @@ static int prv_cmd_sound(const struct pbl_shell *sh, size_t argc, char **argv) {
   return rc;
 }
 
+static int prv_cmd_model(const struct pbl_shell *sh, size_t argc, char **argv) {
+  bool on;
+  const int rc = prv_on_off(sh, argv[1], &on);
+  if (rc == 0) {
+    habit_service_set_model(on);
+  }
+  return rc;
+}
+
 static int prv_cmd_uncal(const struct pbl_shell *sh, size_t argc, char **argv) {
   habit_service_reset_calibration();
   return 0;
@@ -147,6 +158,8 @@ static const struct pbl_shell_cmd sub_habit[] = {
   PBL_SHELL_CMD_ARG(sleepalerts, nullptr, "Alerts while asleep on|off", prv_cmd_sleepalerts, 2,
                     0),
   PBL_SHELL_CMD(uncal, nullptr, "Forget the calibrated regions", prv_cmd_uncal),
+  PBL_SHELL_CMD_ARG(model, nullptr, "Classifier on|off (off: the motion rule alone)",
+                    prv_cmd_model, 2, 0),
   PBL_SHELL_CMD_ARG(sound, nullptr, "Sound level (1 s a minute, level only) on|off",
                     prv_cmd_sound, 2, 0),
   PBL_SHELL_CMD_ARG(beacon, nullptr, "Presence beacon on|off (aired while connected)",

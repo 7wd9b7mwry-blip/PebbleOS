@@ -16,7 +16,8 @@ import sys
 import numpy as np
 import pandas as pd
 
-HEAD_LOOKALIKES = ["Drink from bottle/cup", "Glasses on/off", "Pull air toward your face"]
+HEAD_LOOKALIKES = ["Drink from bottle/cup", "Glasses on/off", "Pull air toward your face",
+                   "StresSense Eating", "StresSense Smoking"]
 
 run = sys.argv[1]
 oof = pd.read_csv(os.path.join(run, "oof.csv"), dtype={"seq": str})

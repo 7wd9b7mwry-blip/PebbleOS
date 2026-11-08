@@ -122,9 +122,9 @@ void test_habit_features__trained_model(void) {
   const int32_t neg = habit_model_score(s_glasses_on_off);
   cl_assert(pos > g_habit_model.threshold);
   cl_assert(neg < g_habit_model.threshold);
-  // the C export of these windows (features_cli): 4441 and -3984, logit x 1024
-  cl_assert(abs(pos - 4441) <= 2);
-  cl_assert(abs(neg - (-3984)) <= 2);
+  // the compiled-in model's scores of these windows (cmi-stressense-v3), logit x 1024
+  cl_assert(abs(pos - 3661) <= 2);
+  cl_assert(abs(neg - (-2631)) <= 2);
 }
 
 void test_habit_features__model_gates_the_detector(void) {

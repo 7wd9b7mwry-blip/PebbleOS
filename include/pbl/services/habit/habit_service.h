@@ -79,6 +79,8 @@ void habit_service_set_alerts_while_asleep(bool on);
 void habit_service_set_beacon(bool on);
 //! Sound level: one second a minute from the microphone, as a level only (no audio is kept).
 void habit_service_set_sound(bool on);
+//! Classifier on (default) or off (the motion rule alone decides, e.g. if the model misbehaves).
+void habit_service_set_model(bool on);
 //! Forget the calibrated regions (back to the generic "hand at the head" default).
 void habit_service_reset_calibration(void);
 
@@ -100,6 +102,10 @@ typedef struct {
   bool sound;
   int16_t sound_rms_db10;   //!< last minute's RMS level, tenths of dBFS
   int16_t sound_peak_db10;
+  bool model;
+  const char *model_version;
+  int32_t model_score;        //!< latest window's score, logit x 1024
+  int32_t model_threshold;
 } HabitServiceStatus;
 
 void habit_service_get_status(HabitServiceStatus *status);

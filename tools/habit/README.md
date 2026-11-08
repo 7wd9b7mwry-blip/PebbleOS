@@ -11,12 +11,24 @@ whether it is picking / pulling / scratching or a look-alike (`habit_features`, 
   detail would otherwise look unlike anything the model saw.
 - **Model**: 60 gradient-boosted trees (LightGBM), generated into
   `fw/services/habit/habit_model_data.h` as integer node tables (about 27 KB).
-- **Data**: Kaggle "CMI - Detect Behavior with Sensor Data" (Child Mind Institute, Helios wrist
-  device, 81 people, 8151 sequences; requires accepting the competition rules). Rotation rates are
-  derived from the orientation quaternions. The leg gestures (pinch / scratch / write on leg) are
-  left out: their motion is a BFRB's, at a place the region stage already rules out.
+- **Data**:
+  - Kaggle "CMI - Detect Behavior with Sensor Data" (Child Mind Institute, Helios wrist device,
+    81 people, 8151 sequences, ~10 Hz). Rotation rates are derived from the orientation
+    quaternions. The leg gestures (pinch / scratch / write on leg) are left out: their motion is
+    a BFRB's, at a place the region stage already rules out.
+  - StresSense (Mendeley Data 2dn3hpbm5m, CC BY 4.0): 40 people, wrist phone IMU, nail biting
+    against eating, smoking and staying still (face touching left out). ~50 Hz, estimated from
+    the data (gyro vs gravity + magnetometer orientation; the timestamps are rounded to 10 s);
+    averaged into 100 ms bins like the watch.
 
-### Results (cmi-v2, out of fold: people the model did not see)
+### Results, shipped model cmi-stressense-v3 (out of fold: people the model did not see)
+
+At p = 0.6: CMI BFRB episodes caught 78.6 %, head look-alikes falsely alerting 4.9 %. StresSense,
+per 10 s stretch: nail biting alerted 82 %, eating 6 %, smoking 17 %, staying still 11 % (on the
+watch the 3 s dwell at a head region and the fine-motion rule come first, which brief
+hand-to-mouth eating rarely passes). Window AUC 0.900.
+
+### Previous: cmi-v2 (CMI only)
 
 | decision threshold | BFRB episodes caught | head look-alikes falsely alerting |
 |---|---|---|
@@ -35,7 +47,8 @@ logging tag 121) once the watch is worn.
 # host tool: the firmware's own feature and model code
 cc -O2 -I include -o habit_features tools/habit/features_cli.c \
    fw/services/habit/habit_features.c fw/services/habit/habit_model.c
-python tools/habit/train.py --source cmi --data <dir with train.csv> --src-hz 10 \
+python tools/habit/train.py --source cmi,stressense --data <dir with train.csv> --src-hz 10 \
+   --stressense <stresSense.csv> \
    --features-cli habit_features --out run --version cmi-vN \
    --exclude-gestures "Pinch knee/leg skin;Scratch knee/leg skin;Write name on leg"
 python tools/habit/evaluate.py run            # episode-level table, pick the threshold
