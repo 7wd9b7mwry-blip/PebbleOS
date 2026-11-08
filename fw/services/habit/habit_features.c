@@ -7,11 +7,12 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define SMOOTH 9      // moving average length (0.36 s): removes gravity and slow motion
-#define EDGE 10       // samples averaged at each end for the forearm turn (0.4 s)
-#define PATH_STEP 5   // 0.2 s steps for the forearm path
-#define LAG_MIN 3
-#define LAG_MAX 12
+// at HABIT_FEAT_HZ (10 Hz)
+#define SMOOTH 3      // moving average length (0.3 s): removes gravity and slow motion
+#define EDGE 4        // samples averaged at each end for the forearm turn (0.4 s)
+#define PATH_STEP 2   // 0.2 s steps for the forearm path
+#define LAG_MIN 2     // repetition lags: 5 Hz ...
+#define LAG_MAX 6     // ... to 1.7 Hz
 
 static int64_t prv_isqrt(int64_t v) {
   if (v <= 0) {

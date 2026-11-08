@@ -120,14 +120,33 @@ static uint8_t prv_confidence(const HabitDetector *d, HabitRegion r, int32_t cos
 _Static_assert(HabitFeatCount == 16, "habit_detect keeps 16 features");
 _Static_assert(HABIT_DETECT_WINDOW == HABIT_FEAT_WINDOW, "window length");
 
-static void prv_window_push(HabitDetector *d, const HabitVec *accel) {
-  d->win_acc[d->win_head] = *accel;
-  d->win_gyro[d->win_head] = d->last_gyro;
-  d->win_head = (uint8_t)((d->win_head + 1) % HABIT_DETECT_WINDOW);
-  if (d->win_count < HABIT_DETECT_WINDOW) {
-    d->win_count++;
+//! Average the samples of each 100 ms into one classifier sample (10 Hz, like the training data)
+static void prv_window_push(HabitDetector *d, uint32_t t_ms, const HabitVec *accel) {
+  const uint32_t id = t_ms / (1000 / HABIT_FEAT_HZ);
+  if (d->bin_n > 0 && id != d->bin_id) {
+    const int32_t n = d->bin_n;
+    d->win_acc[d->win_head] = (HabitVec){(int16_t)(d->bin_acc[0] / n), (int16_t)(d->bin_acc[1] / n),
+                                         (int16_t)(d->bin_acc[2] / n)};
+    d->win_gyro[d->win_head] = (HabitVec){(int16_t)(d->bin_gyro[0] / n),
+                                          (int16_t)(d->bin_gyro[1] / n),
+                                          (int16_t)(d->bin_gyro[2] / n)};
+    d->win_head = (uint8_t)((d->win_head + 1) % HABIT_DETECT_WINDOW);
+    if (d->win_count < HABIT_DETECT_WINDOW) {
+      d->win_count++;
+    }
+    d->since_score++;
+    memset(d->bin_acc, 0, sizeof(d->bin_acc));
+    memset(d->bin_gyro, 0, sizeof(d->bin_gyro));
+    d->bin_n = 0;
   }
-  d->since_score++;
+  d->bin_id = id;
+  d->bin_acc[0] += accel->x;
+  d->bin_acc[1] += accel->y;
+  d->bin_acc[2] += accel->z;
+  d->bin_gyro[0] += d->last_gyro.x;
+  d->bin_gyro[1] += d->last_gyro.y;
+  d->bin_gyro[2] += d->last_gyro.z;
+  d->bin_n++;
 }
 
 //! Score the window every HABIT_FEAT_HOP samples while the hand is near the head
@@ -240,7 +259,7 @@ HabitEvent habit_detect_feed(HabitDetector *d, uint32_t t_ms, const HabitVec *ac
   const HabitRegion r = prv_gravity_sane(d) ? prv_match(d, &cos_x1000) : HabitRegion_None;
 
   if (!vibrating) {
-    prv_window_push(d, accel);
+    prv_window_push(d, t_ms, accel);
   }
   if (r != HabitRegion_None || d->state != HabitState_Idle) {
     prv_window_score(d);

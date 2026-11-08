@@ -8,8 +8,8 @@
 //!      fw/services/habit/habit_features.c fw/services/habit/habit_model.c   (one line)
 //!   habit_features < samples.csv > features.csv
 //!
-//! Input: "seq,ax,ay,az,gx,gy,gz" per line, 25 Hz, mG and 0.1 deg/s, a sequence's samples in
-//! order (gx empty: no gyroscope). Output per 2 s window (1 s hop): "seq,end,score,<features>",
+//! Input: "seq,ax,ay,az,gx,gy,gz" per line, HABIT_FEAT_HZ (10 Hz), mG and 0.1 deg/s, a sequence's samples in
+//! order (gx empty: no gyroscope). Output per 3 s window (1 s hop): "seq,end,score,<features>",
 //! end = index of the window's last sample within its sequence.
 
 #include <stdio.h>

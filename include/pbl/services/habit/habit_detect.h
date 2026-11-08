@@ -71,8 +71,9 @@ typedef enum {
   HabitState_Active,
 } HabitState;
 
-//! Motion window kept for the classifier: the last 2 s (HABIT_FEAT_WINDOW samples at 25 Hz)
-#define HABIT_DETECT_WINDOW 50
+//! Motion window kept for the classifier: the last 3 s as 100 ms bins (HABIT_FEAT_WINDOW at
+//! HABIT_FEAT_HZ)
+#define HABIT_DETECT_WINDOW 30
 
 typedef struct {
   HabitConfig cfg;
@@ -81,6 +82,9 @@ typedef struct {
   HabitVec win_acc[HABIT_DETECT_WINDOW];
   HabitVec win_gyro[HABIT_DETECT_WINDOW];
   HabitVec last_gyro;
+  int32_t bin_acc[3], bin_gyro[3];
+  uint8_t bin_n;
+  uint32_t bin_id;        //!< t_ms / 100 of the bin being filled
   uint8_t win_head;
   uint8_t win_count;
   uint8_t since_score;

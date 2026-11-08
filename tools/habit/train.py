@@ -7,7 +7,7 @@ the watch scores exactly what was trained. Sources:
                                train_demographics.csv): Helios wrist IMU, 8 BFRB-like gestures
                                (hair / eyebrow / eyelash pulling, forehead / neck scratching,
                                cheek / neck pinching) against 10 look-alikes (drinking, glasses,
-                               phone, waving, ...). Converted to 25 Hz, mG and 0.1 deg/s; the
+                               phone, waving, ...). Used at its ~10 Hz (the classifier's rate), in mG and 0.1 deg/s; the
                                rotation rate is derived from the orientation quaternions.
   --source synthetic           Generated sequences, to check the pipeline end to end.
 
@@ -29,12 +29,12 @@ import tempfile
 import numpy as np
 import pandas as pd
 
-HZ = 25
+HZ = 10  # the classifier's rate (habit_features.h); CMI is recorded at ~10 Hz
 G = 9.80665
 FEATURES = ["hp_mag_mean", "hp_mag_std", "hp_mag_max", "slow_motion", "jerk", "gyro_mag_mean",
             "gyro_mag_std", "gyro_mag_max", "gyro_hp_mean", "grav_turn", "grav_path", "hp_zcr",
             "gyro_zcr", "repetition", "gyro_to_acc", "gravity_error"]
-WINDOW, HOP = 50, 25
+WINDOW, HOP = 30, 10
 
 
 # ---- sources ----------------------------------------------------------------------------------
@@ -108,7 +108,7 @@ def load_synthetic(n_subjects=12, per=40, seed=1):
             base = np.array([-940, 0, -340]) + rng.normal(0, 60, 3)
             acc = np.tile(base, (n, 1)).astype(float)
             gyro = rng.normal(0, 20, (n, 3))
-            f = rng.uniform(3, 6)
+            f = rng.uniform(2, 4.5)  # below the 5 Hz Nyquist of the 10 Hz classifier
             if kind in ("picking", "pulling", "scratch"):
                 amp = {"picking": 40, "pulling": 70, "scratch": 110}[kind] * gain
                 acc += amp * np.stack([np.sin(2 * np.pi * f * t + p) for p in (0, 1, 2)], 1)
@@ -203,6 +203,8 @@ def train_eval(df, args):
     recall = float(np.mean(oof[y == 1] > thr))
     per_gesture = df.assign(p=oof > thr).groupby("gesture")["p"].mean().sort_values()
     final = lgb.LGBMClassifier(**params).fit(X, y)
+    df.assign(oof=oof)[["seq", "end", "subject", "gesture", "y", "oof"]].to_csv(
+        os.path.join(args.out, "oof.csv"), index=False)
     return final, dict(auc=auc, threshold_prob=thr, recall_at_fpr=recall, fpr=args.fpr,
                        windows=int(len(y)), positives=int(y.sum()),
                        subjects=int(len(set(groups))),
@@ -272,6 +274,9 @@ def main():
     ap.add_argument("--depth", type=int, default=4)
     ap.add_argument("--fpr", type=float, default=0.05)
     ap.add_argument("--version", default="dev")
+    ap.add_argument("--exclude-gestures", default="",
+                    help="gestures left out of training, ;-separated (e.g. the leg ones, which the "
+                         "hand-at-the-head stage already rules out)")
     args = ap.parse_args()
 
     seqs, labels = (load_cmi(args.data, args.src_hz) if args.source == "cmi"
@@ -279,8 +284,12 @@ def main():
     print(f"{len(seqs)} sequences", file=sys.stderr)
     feat = run_features(seqs, args.features_cli)
     df = label_windows(feat, labels)
-    model, report = train_eval(df, args)
+    excluded = [g for g in args.exclude_gestures.split(";") if g]
+    if excluded:
+        df = df[~df["gesture"].isin(excluded)]
     os.makedirs(args.out, exist_ok=True)
+    model, report = train_eval(df, args)
+    report["excluded_gestures"] = excluded
     n_nodes, n_trees = export_c(model, report["threshold_prob"], args.version,
                                 os.path.join(args.out, "habit_model_data.h"))
     report.update(nodes=n_nodes, trees=n_trees, version=args.version, source=args.source)

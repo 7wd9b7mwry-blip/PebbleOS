@@ -71,6 +71,7 @@ static void prv_move(V3 a, V3 b, uint32_t ms) {
 void test_habit_detect__initialize(void) {
   HabitConfig cfg;
   habit_detect_default_config(&cfg);
+  cfg.use_model = false;  // the detector's own logic; the classifier is tested in test_habit_features
   habit_detect_init(&s_d, &cfg);
   s_t = 100000;
   s_starts = s_ends = s_ongoing = 0;
