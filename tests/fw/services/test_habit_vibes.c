@@ -219,3 +219,24 @@ void test_habit_vibes__not_worn_does_nothing(void) {
     cl_assert(!smart_vibes_on_minute(&s_sv, &in, NULL));
   }
 }
+
+void test_habit_vibes__minutes_without_a_reading_are_skipped(void) {
+  prv_minutes(60, 62, 45, 10, false, NULL);
+  // stressed readings two minutes apart still add up to a run (gaps neither count nor reset)
+  cl_assert_equal_i(prv_minutes(1, 85, 40, 10, false, NULL), 0);
+  cl_assert_equal_i(prv_minutes(1, 0, 0, 10, false, NULL), 0);
+  cl_assert_equal_i(prv_minutes(1, 85, 40, 10, false, NULL), 0);
+  cl_assert_equal_i(prv_minutes(1, 0, 0, 10, false, NULL), 0);
+  cl_assert_equal_i(prv_minutes(1, 85, 40, 10, false, NULL), 1);
+}
+
+void test_habit_vibes__heart_rate_interval_adapts(void) {
+  cl_assert_equal_i(smart_vibes_hr_interval_s(&s_sv, false), 60);  // learning the baseline
+  prv_minutes(60, 62, 45, 10, false, NULL);
+  cl_assert_equal_i(smart_vibes_hr_interval_s(&s_sv, false), 300);  // calm: every 5 min
+  cl_assert_equal_i(smart_vibes_hr_interval_s(&s_sv, true), 60);    // asleep: every minute
+  prv_minutes(1, 85, 40, 10, false, NULL);                          // stress building
+  cl_assert_equal_i(smart_vibes_hr_interval_s(&s_sv, false), 60);
+  prv_minutes(1, 62, 45, 10, false, NULL);                          // settled again
+  cl_assert_equal_i(smart_vibes_hr_interval_s(&s_sv, false), 300);
+}

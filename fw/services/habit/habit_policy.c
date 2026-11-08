@@ -82,7 +82,16 @@ void smart_vibes_default_config(SmartVibeConfig *cfg) {
       .sleep_max_per_night = 6,
       .calm_ms = 3 * 60 * 1000,
       .sleep_ms = 2 * 60 * 1000,
+      .hr_fast_s = 60,
+      .hr_slow_s = 300,
   };
+}
+
+uint16_t smart_vibes_hr_interval_s(const SmartVibes *s, bool asleep) {
+  if (asleep || s->stressed_run > 0 || s->rest_n < 30) {
+    return s->cfg.hr_fast_s;
+  }
+  return s->cfg.hr_slow_s;
 }
 
 void smart_vibes_init(SmartVibes *s, const SmartVibeConfig *cfg) {
@@ -116,9 +125,12 @@ bool smart_vibes_on_minute(SmartVibes *s, const SmartVibeInput *in, VibeRequest 
     s->night_of_count = night;
     s->night_count = 0;
   }
-  if (!in->worn || in->hr_bpm == 0) {
+  if (!in->worn) {
     s->stressed_run = 0;
     return false;
+  }
+  if (in->hr_bpm == 0) {
+    return false;  // no new reading this minute (measured less often while calm)
   }
 
   if (in->asleep) {

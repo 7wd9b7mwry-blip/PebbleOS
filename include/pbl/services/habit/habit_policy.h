@@ -76,6 +76,8 @@ typedef struct {
   uint8_t sleep_max_per_night;
   uint32_t calm_ms;
   uint32_t sleep_ms;
+  uint16_t hr_fast_s;            //!< heart rate interval asleep, while stress builds, or learning
+  uint16_t hr_slow_s;            //!< otherwise (the optical sensor is the costliest sensor)
 } SmartVibeConfig;
 
 typedef struct {
@@ -96,8 +98,13 @@ typedef struct {
 void smart_vibes_default_config(SmartVibeConfig *cfg);
 void smart_vibes_init(SmartVibes *s, const SmartVibeConfig *cfg);
 
-//! Feed one minute; returns true and fills `req` when a program should start.
+//! Feed one minute; returns true and fills `req` when a program should start. A worn minute
+//! without a new reading (hr_bpm 0) is skipped: it neither counts nor breaks a stressed run.
 bool smart_vibes_on_minute(SmartVibes *s, const SmartVibeInput *in, VibeRequest *req);
+
+//! How often heart rate should be measured now (seconds): every minute asleep, while a stressed
+//! run is building or while the resting baseline is still being learned; otherwise hr_slow_s.
+uint16_t smart_vibes_hr_interval_s(const SmartVibes *s, bool asleep);
 
 //! Baselines learned so far (bpm, ms), 0 if not yet known.
 void smart_vibes_baselines(const SmartVibes *s, uint8_t *rest_hr, uint8_t *sleep_hr,

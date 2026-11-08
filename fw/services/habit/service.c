@@ -44,7 +44,7 @@ PBL_LOG_MODULE_DEFINE(service_habit, CONFIG_SERVICE_HABIT_LOG_LEVEL);
 #define REFILL_MS 500
 #define STEP_MS 50
 #define FLOOR_PCT 12           // weakest strength the LRA is felt at (to tune on the watch)
-#define HR_FRESH_MS (3 * 60 * 1000)
+#define HR_FRESH_SLACK_MS (2 * 60 * 1000)  // a reading stays current this long past its interval
 #define MIN_HR_CONFIDENCE 50
 #define MIN_PPI_CONFIDENCE 60
 #define SETTINGS_FILE "/habit"
@@ -55,7 +55,7 @@ PBL_LOG_MODULE_DEFINE(service_habit, CONFIG_SERVICE_HABIT_LOG_LEVEL);
 #define BEACON_REFRESH_MIN 10   // battery level refresh; also re-arms after a Bluetooth restart
 #define SOUND_FRAME_SAMPLES 320   // 20 ms at 16 kHz
 #define SOUND_FRAMES 50           // one second a minute
-#define POSTURE_PERIOD_MS 10000   // a scan burst every 10 s ...
+#define POSTURE_PERIOD_MS 10000   // the scan timer; bursts every 10 s while the tag is worn ...
 #define POSTURE_BURST_MS 1200     // ... long enough for one 1 s advertisement of the tag
 #define POSTURE_PAIR_MIN_RSSI -65 // pairing: the tag must be right next to the watch
 #define WALKING_STEPS_PER_MIN 60  // a minute with this many steps teaches the upright reference
@@ -82,7 +82,9 @@ static struct {
   uint32_t motion_sum;
   uint32_t motion_n;
   uint8_t bpm;
+  bool bpm_new;            // a reading arrived since the last minute
   uint64_t bpm_at_ms;
+  uint16_t hr_interval_s;  // current heart rate interval (adaptive)
   bool off_wrist;
   uint16_t ppi_prev;
   uint64_t ppi_sq_sum;
@@ -110,6 +112,7 @@ static struct {
   bool posture_pairing;
   uint8_t posture_tag[6];   // as on air (least significant byte first); all 0: none
   PostureDetector posture;
+  PostureScanner scanner;
   TimerID posture_timer;
   bool walking;
   int32_t last_steps;
@@ -401,19 +404,22 @@ static void prv_posture_burst_kbg(void *unused) {
       memcpy(s.posture_tag, got.best_addr, 6);
       prv_settings_set(KEY_POSTURE_TAG, s.posture_tag, sizeof(s.posture_tag));
       posture_forget_reference(&s.posture);
+      posture_scan_reset(&s.scanner);
       s.posture_pairing = false;
       PBL_LOG_INFO("posture tag paired (rssi %d)", got.best_rssi);
     }
     return;
   }
+  const uint32_t now_s = (uint32_t)(pbl_uptime_ms() / 1000);
   if (got.n == 0) {
+    posture_scan_result(&s.scanner, now_s, NULL);
     return;
   }
   s.tag_battery = got.battery;
   s.posture_readings++;
   const HabitVec avg = {(int16_t)(got.sum[0] / got.n), (int16_t)(got.sum[1] / got.n),
                         (int16_t)(got.sum[2] / got.n)};
-  const uint32_t now_s = (uint32_t)(pbl_uptime_ms() / 1000);
+  posture_scan_result(&s.scanner, now_s, &avg);
   if (posture_feed(&s.posture, now_s, &avg, s.walking) && !s.playing &&
       !vibe_pattern_is_owned_by(VibePatternOwner_Habit)) {
     s.posture_alerts++;
@@ -431,6 +437,10 @@ static void prv_posture_tick_kbg(void *unused) {
     return;
   }
   if (!s.posture_pairing && !(s.posture_on && prv_tag_set())) {
+    return;
+  }
+  // pairing listens on every tick; otherwise the scheduler slows down for an absent / unworn tag
+  if (!s.posture_pairing && !posture_scan_due(&s.scanner, (uint32_t)(pbl_uptime_ms() / 1000))) {
     return;
   }
   const int rc = pbl_bt_observer_scan(POSTURE_BURST_MS, prv_scan_report, prv_scan_done, nullptr);
@@ -458,7 +468,8 @@ static void prv_posture_minute(void) {
   if (m.readings > 0 || (s.posture_on && prv_tag_set())) {
     prv_log(HabitLogKind_Posture, (uint8_t)(m.readings > 255 ? 255 : m.readings), m.slouched,
             (uint16_t)(m.mean_cos_x1000 + 1000), (uint16_t)(m.min_cos_x1000 + 1000),
-            (uint32_t)s.tag_battery | ((uint32_t)m.calibrated << 8) | ((uint32_t)s.walking << 9));
+            (uint32_t)s.tag_battery | ((uint32_t)m.calibrated << 8) | ((uint32_t)s.walking << 9) |
+                ((uint32_t)s.scanner.mode << 10));
   }
 }
 
@@ -613,6 +624,7 @@ static void prv_hrm_cb(PebbleHRMEvent *e, void *context) {
     s.off_wrist = e->bpm.off_wrist;
     if (!e->bpm.off_wrist && e->bpm.confidence >= MIN_HR_CONFIDENCE && e->bpm.bpm >= 30) {
       s.bpm = e->bpm.bpm;
+      s.bpm_new = true;
       s.bpm_at_ms = pbl_uptime_ms();
     }
   } else if (e->event_type == HRMEvent_HRV) {
@@ -644,6 +656,17 @@ static uint16_t prv_isqrt(uint64_t v) {
   return (uint16_t)x;
 }
 
+static void prv_hr_interval_update(void) {
+  const uint16_t want = smart_vibes_hr_interval_s(&s.smart, s.asleep);
+  if (want == s.hr_interval_s || s.hrm == HRM_INVALID_SESSION_REF) {
+    return;
+  }
+  if (sys_hrm_manager_set_update_interval(s.hrm, want, 0 /*expire_s*/)) {
+    PBL_LOG_DBG("heart rate every %u s", want);
+    s.hr_interval_s = want;
+  }
+}
+
 static void prv_minute_kbg(void *unused) {
   if (!s.running) {
     return;
@@ -653,7 +676,9 @@ static void prv_minute_kbg(void *unused) {
   s.asleep = (sleep_state == ActivitySleepStateRestfulSleep ||
               sleep_state == ActivitySleepStateLightSleep);
 
-  const bool fresh = s.bpm && pbl_uptime_ms() - s.bpm_at_ms < HR_FRESH_MS;
+  // worn: a reading within the current interval (plus slack); judged only on new readings
+  const bool fresh = s.bpm && pbl_uptime_ms() - s.bpm_at_ms <
+                                  (uint64_t)s.hr_interval_s * 1000 + HR_FRESH_SLACK_MS;
   const uint16_t rmssd = s.ppi_n >= 10 ? prv_isqrt(s.ppi_sq_sum / s.ppi_n) : 0;
   const uint16_t motion = s.motion_n ? (uint16_t)(s.motion_sum / s.motion_n) : 0;
   const uint32_t lux = light_get_ambient_lux();
@@ -666,7 +691,7 @@ static void prv_minute_kbg(void *unused) {
       .minute_of_day = (uint16_t)(lt.tm_hour * 60 + lt.tm_min),
       .worn = !s.off_wrist && fresh,
       .asleep = s.asleep,
-      .hr_bpm = fresh ? s.bpm : 0,
+      .hr_bpm = fresh && s.bpm_new ? s.bpm : 0,
       .rmssd_ms = rmssd,
       .motion = motion,
   };
@@ -680,6 +705,8 @@ static void prv_minute_kbg(void *unused) {
   prv_log(HabitLogKind_Minute, in.hr_bpm, rmssd, motion, (uint16_t)(lux > 0xFFFF ? 0xFFFF : lux),
           (uint32_t)sleep_state);
 
+  s.bpm_new = false;
+  prv_hr_interval_update();
   s.motion_sum = s.motion_n = 0;
   s.ppi_sq_sum = 0;
   s.ppi_n = 0;
@@ -718,8 +745,9 @@ static void prv_start_kbg(void *unused) {
   }
   accel_session_data_subscribe(s.accel, BATCH, prv_accel_cb);
   accel_session_set_sampling_rate(s.accel, ACCEL_SAMPLING_25HZ);
-  // heart rate once a minute, beat intervals for HRV
-  s.hrm = hrm_manager_subscribe_with_callback(INSTALL_ID_INVALID, 60, 0 /*expire_s*/,
+  // heart rate (and beat intervals for HRV) every minute or every few, see prv_hr_interval_update()
+  s.hr_interval_s = smart_vibes_hr_interval_s(&s.smart, s.asleep);
+  s.hrm = hrm_manager_subscribe_with_callback(INSTALL_ID_INVALID, s.hr_interval_s, 0 /*expire_s*/,
                                               HRMFeature_BPM | HRMFeature_HRV,
                                               false /*low_latency*/, prv_hrm_cb, nullptr);
   pbl_cron_job_schedule(&s_minute_job);
@@ -780,6 +808,10 @@ void habit_service_init(void) {
   PostureConfig pcfg;
   posture_default_config(&pcfg);
   posture_init(&s.posture, &pcfg);
+  PostureScanConfig sccfg;
+  posture_scan_default_config(&sccfg);
+  sccfg.period_s = POSTURE_PERIOD_MS / 1000;
+  posture_scan_init(&s.scanner, &sccfg);
   s.sound_rms_db10 = s.sound_peak_db10 = SOUND_LEVEL_FLOOR_DB10;
 }
 
@@ -937,6 +969,7 @@ static void prv_posture_set_tag_kbg(void *unused) {
   }
   prv_settings_set(KEY_POSTURE_TAG, s.posture_tag, sizeof(s.posture_tag));
   posture_forget_reference(&s.posture);
+  posture_scan_reset(&s.scanner);
   s.posture_pairing = false;
 }
 
@@ -1003,4 +1036,6 @@ void habit_service_get_status(HabitServiceStatus *st) {
   st->posture_scans_failed = s.scans_failed;
   st->posture_last_scan_rc = s.last_scan_rc;
   st->walking = s.walking;
+  st->posture_scan_mode = (uint8_t)s.scanner.mode;
+  st->hr_interval_s = s.hr_interval_s;
 }

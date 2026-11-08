@@ -133,3 +133,83 @@ void test_posture__minute_summary_and_forget(void) {
   posture_forget_reference(&s_d);
   cl_assert(!s_d.calibrated);
 }
+
+// ---- scan scheduling ---------------------------------------------------------------------------
+
+static PostureScanner s_sc;
+
+//! ticks every 10 s for `secs`; `reading` NULL: the tag is not heard. Returns the bursts started.
+static int prv_ticks(uint32_t secs, const HabitVec *reading, bool jiggle) {
+  int bursts = 0;
+  for (uint32_t t = 0; t < secs; t += 10) {
+    if (posture_scan_due(&s_sc, s_t)) {
+      bursts++;
+      HabitVec a;
+      if (reading) {
+        a = *reading;
+        if (jiggle) {
+          a.x += (int16_t)((rand() % 121) - 60);
+        }
+      }
+      posture_scan_result(&s_sc, s_t, reading ? &a : NULL);
+    }
+    s_t += 10;
+  }
+  return bursts;
+}
+
+static void prv_scan_init(void) {
+  PostureScanConfig cfg;
+  posture_scan_default_config(&cfg);
+  posture_scan_init(&s_sc, &cfg);
+}
+
+void test_posture__worn_tag_is_read_every_10_s(void) {
+  prv_scan_init();
+  const HabitVec a = prv_tilt(5);
+  cl_assert_equal_i(prv_ticks(1800, &a, true), 180);  // 30 min, moving a little
+  cl_assert_equal_i(s_sc.mode, PostureScan_Active);
+}
+
+void test_posture__absent_tag_is_checked_once_a_minute(void) {
+  prv_scan_init();
+  cl_assert_equal_i(prv_ticks(30, NULL, false), 3);  // three misses ...
+  cl_assert_equal_i(s_sc.mode, PostureScan_Lost);
+  cl_assert_equal_i(prv_ticks(600, NULL, false), 10);  // ... then once a minute
+  // the strap goes on: back to every 10 s at the next check
+  const HabitVec a = prv_tilt(5);
+  prv_ticks(60, &a, true);
+  cl_assert_equal_i(s_sc.mode, PostureScan_Active);
+  cl_assert_equal_i(prv_ticks(600, &a, true), 60);
+}
+
+void test_posture__still_tag_parks_and_wakes_on_movement(void) {
+  prv_scan_init();
+  const HabitVec a = prv_tilt(5);
+  cl_assert_equal_i(prv_ticks(600, &a, false), 60);  // lying on a chair: 10 min at full rate
+  cl_assert_equal_i(prv_ticks(10, &a, false), 1);
+  cl_assert_equal_i(s_sc.mode, PostureScan_Parked);
+  cl_assert_equal_i(prv_ticks(1200, &a, false), 20);  // then once a minute
+  // picked up: the next reading moves, full rate again
+  const HabitVec b = prv_tilt(30);
+  prv_ticks(60, &b, false);
+  cl_assert_equal_i(s_sc.mode, PostureScan_Active);
+  cl_assert_equal_i(prv_ticks(100, &b, true), 10);
+}
+
+void test_posture__parked_readings_still_judge_a_slouch(void) {
+  // once-a-minute readings (a very still wearer) must not count as gaps in a slouch
+  prv_run(0, 120, 10, true);
+  cl_assert_equal_i(prv_run(25, 60, 60, false), 0);
+  cl_assert_equal_i(prv_run(25, 60, 60, false), 1);
+}
+
+void test_posture__reset_keeps_the_schedule(void) {
+  prv_scan_init();
+  prv_ticks(30, NULL, false);
+  posture_scan_reset(&s_sc);  // a new tag: fast again, same configuration
+  cl_assert_equal_i(s_sc.mode, PostureScan_Active);
+  cl_assert_equal_i(s_sc.cfg.slow_s, 60);
+  cl_assert_equal_i(prv_ticks(30, NULL, false), 3);
+  cl_assert_equal_i(prv_ticks(600, NULL, false), 10);
+}

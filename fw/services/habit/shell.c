@@ -18,8 +18,9 @@ static int prv_cmd_status(const struct pbl_shell *sh, size_t argc, char **argv) 
                   st.gravity.z, st.gross_mg, st.fine_mg);
   pbl_shell_print(sh, "episodes %lu, alerts %lu, smart vibes %lu", (unsigned long)st.episodes,
                   (unsigned long)st.alerts, (unsigned long)st.smart_vibes);
-  pbl_shell_print(sh, "baselines: rest %u bpm, sleep %u bpm, rest RMSSD %u ms", st.rest_hr,
-                  st.sleep_hr, st.rest_rmssd);
+  pbl_shell_print(sh,
+                  "baselines: rest %u bpm, sleep %u bpm, rest RMSSD %u ms; heart rate every %u s",
+                  st.rest_hr, st.sleep_hr, st.rest_rmssd, st.hr_interval_s);
   pbl_shell_print(sh, "vibrate %d, alerts while asleep %d, calibrated 0x%02x", st.vibrate,
                   st.alerts_while_asleep, st.regions_calibrated);
   pbl_shell_print(sh, "beacon %d (airing %d)", st.beacon, st.beacon_airing);
@@ -32,10 +33,14 @@ static int prv_cmd_status(const struct pbl_shell *sh, size_t argc, char **argv) 
                   st.posture_tag[1], st.posture_tag[2], st.posture_tag[3], st.posture_tag[4],
                   st.posture_tag[5], st.posture_battery, st.posture_state, st.posture_calibrated,
                   st.posture_cos_x1000, st.walking);
-  pbl_shell_print(sh, "posture readings %lu, alerts %lu, scans ok %lu failed %lu (last rc %ld)",
+  static const char *const scan_modes[] = {"active", "lost", "parked"};
+  pbl_shell_print(sh,
+                  "posture readings %lu, alerts %lu, scans ok %lu failed %lu (last rc %ld), "
+                  "scanning %s",
                   (unsigned long)st.posture_readings, (unsigned long)st.posture_alerts,
                   (unsigned long)st.posture_scans_ok, (unsigned long)st.posture_scans_failed,
-                  (long)st.posture_last_scan_rc);
+                  (long)st.posture_last_scan_rc,
+                  st.posture_scan_mode < 3 ? scan_modes[st.posture_scan_mode] : "?");
   pbl_shell_print(sh, "sound %d: last minute RMS %d.%d dBFS, peak %d.%d dBFS", st.sound,
                   st.sound_rms_db10 / 10, abs(st.sound_rms_db10 % 10), st.sound_peak_db10 / 10,
                   abs(st.sound_peak_db10 % 10));

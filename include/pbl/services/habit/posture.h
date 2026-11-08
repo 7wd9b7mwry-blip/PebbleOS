@@ -82,3 +82,47 @@ typedef struct {
 
 //! The summary since the last call (then reset).
 void posture_take_minute(PostureDetector *d, PostureMinute *out);
+
+// ---- scan scheduling (battery) ------------------------------------------------------------------
+//
+// Listening for the tag is the costliest radio work, so bursts are frequent only while the tag is
+// heard and being worn: when it is not heard for a few bursts (strap off, out of range) or its
+// readings have not moved at all for a while (strap on a chair), it is checked once a minute
+// instead, and any movement brings the fast rate back.
+
+typedef enum {
+  PostureScan_Active = 0,  //!< heard and moving: every period_s
+  PostureScan_Lost,        //!< not heard for lost_after bursts: every slow_s
+  PostureScan_Parked,      //!< heard but perfectly still for parked_after_s: every slow_s
+} PostureScanMode;
+
+typedef struct {
+  uint16_t period_s;        //!< burst interval while active
+  uint16_t slow_s;          //!< burst interval while lost or parked
+  uint8_t lost_after;       //!< bursts in a row without the tag
+  uint16_t parked_after_s;  //!< no reading moved more than still_mg from the last for this long
+  uint16_t still_mg;
+} PostureScanConfig;
+
+typedef struct {
+  PostureScanConfig cfg;
+  PostureScanMode mode;
+  uint8_t missed;
+  uint32_t last_burst_s;
+  bool scanned;
+  bool have_still;
+  HabitVec still_ref;
+  uint32_t still_since_s;
+} PostureScanner;
+
+void posture_scan_default_config(PostureScanConfig *cfg);
+void posture_scan_init(PostureScanner *sc, const PostureScanConfig *cfg);
+
+//! Back to the fast rate with the same configuration (a new tag was set).
+void posture_scan_reset(PostureScanner *sc);
+
+//! Called on every tick of the (period_s) timer: true when a burst should start now.
+bool posture_scan_due(PostureScanner *sc, uint32_t now_s);
+
+//! A burst ended: `acc_mg` is the tag's reading, or NULL if the tag was not heard.
+void posture_scan_result(PostureScanner *sc, uint32_t now_s, const HabitVec *acc_mg);

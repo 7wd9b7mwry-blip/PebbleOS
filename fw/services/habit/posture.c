@@ -48,7 +48,7 @@ void posture_default_config(PostureConfig *cfg) {
       .recline_cos_x1000 = 500,  // 60 degrees
       .slouch_s = 60,
       .repeat_s = 300,
-      .gap_s = 60,
+      .gap_s = 90,  // > the once-a-minute rate of a parked tag, so a slow slouch still counts
       .ref_n = 12,
   };
 }
@@ -167,4 +167,69 @@ void posture_take_minute(PostureDetector *d, PostureMinute *out) {
   out->min_cos_x1000 = d->min_readings ? d->min_cos_min : 0;
   out->calibrated = d->calibrated;
   prv_minute_reset(d);
+}
+
+// ---- scan scheduling ----------------------------------------------------------------------------
+
+void posture_scan_default_config(PostureScanConfig *cfg) {
+  *cfg = (PostureScanConfig){
+      .period_s = 10,
+      .slow_s = 60,
+      .lost_after = 3,
+      .parked_after_s = 600,
+      .still_mg = 25,
+  };
+}
+
+void posture_scan_init(PostureScanner *sc, const PostureScanConfig *cfg) {
+  const PostureScanConfig c = *cfg;  // may point into *sc
+  memset(sc, 0, sizeof(*sc));
+  sc->cfg = c;
+}
+
+void posture_scan_reset(PostureScanner *sc) {
+  posture_scan_init(sc, &sc->cfg);
+}
+
+bool posture_scan_due(PostureScanner *sc, uint32_t now_s) {
+  const uint32_t every = sc->mode == PostureScan_Active ? sc->cfg.period_s : sc->cfg.slow_s;
+  // ticks come every period_s with some jitter: allow one second early
+  if (sc->scanned && now_s - sc->last_burst_s + 1 < every) {
+    return false;
+  }
+  sc->scanned = true;
+  sc->last_burst_s = now_s;
+  return true;
+}
+
+static int32_t prv_abs(int32_t v) {
+  return v < 0 ? -v : v;
+}
+
+void posture_scan_result(PostureScanner *sc, uint32_t now_s, const HabitVec *acc_mg) {
+  if (!acc_mg) {
+    if (sc->missed < 255) {
+      sc->missed++;
+    }
+    if (sc->missed >= sc->cfg.lost_after) {
+      sc->mode = PostureScan_Lost;
+      sc->have_still = false;
+    }
+    return;
+  }
+  sc->missed = 0;
+  const bool moved = !sc->have_still ||
+                     prv_abs(acc_mg->x - sc->still_ref.x) > sc->cfg.still_mg ||
+                     prv_abs(acc_mg->y - sc->still_ref.y) > sc->cfg.still_mg ||
+                     prv_abs(acc_mg->z - sc->still_ref.z) > sc->cfg.still_mg;
+  if (moved) {
+    sc->have_still = true;
+    sc->still_ref = *acc_mg;
+    sc->still_since_s = now_s;
+    sc->mode = PostureScan_Active;
+  } else if (now_s - sc->still_since_s >= sc->cfg.parked_after_s) {
+    sc->mode = PostureScan_Parked;
+  } else {
+    sc->mode = PostureScan_Active;
+  }
 }

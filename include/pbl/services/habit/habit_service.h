@@ -130,6 +130,8 @@ typedef struct {
   uint32_t posture_scans_ok, posture_scans_failed;
   int32_t posture_last_scan_rc;
   bool walking;
+  uint8_t posture_scan_mode;   //!< PostureScanMode
+  uint16_t hr_interval_s;      //!< current heart rate interval
 } HabitServiceStatus;
 
 void habit_service_get_status(HabitServiceStatus *status);
