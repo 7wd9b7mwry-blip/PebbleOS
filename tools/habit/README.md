@@ -28,6 +28,19 @@ per 10 s stretch: nail biting alerted 82 %, eating 6 %, smoking 17 %, staying st
 watch the 3 s dwell at a head region and the fine-motion rule come first, which brief
 hand-to-mouth eating rarely passes). Window AUC 0.900.
 
+### WISDM (everyday activities): evaluated, not in the shipped model
+
+WISDM (UCI 507: ~51 people, watch at 20 Hz, 3 min each of 18 activities) scored by the shipped
+cmi-stressense-v3 (never trained on it), share of 10 s stretches alerted at p 0.6: brushing teeth
+78 %, writing 79 %, typing 73 %, clapping 36 %, eating pasta 28 %, other eating 3-7 %, walking 7 %.
+The classifier alone does not separate these from picking; on the watch the hand-at-the-head stage
+(3 s at a calibrated region) screens them out (hands on the desk, or the other hand).
+
+Training with WISDM as negatives (`--source cmi,stressense,wisdm --wisdm-weight 0.1`), at the same
+5 % of head look-alikes: brushing teeth 20 %, writing 35 %, typing 22 %, nail biting 84.5 % (82 %),
+but CMI BFRB episodes caught 68.7 % instead of 78.6 %. Since the head look-alikes are what passes
+the region stage, v3 stays shipped; revisit with the wearer's own false-alarm labels.
+
 ### Previous: cmi-v2 (CMI only)
 
 | decision threshold | BFRB episodes caught | head look-alikes falsely alerting |

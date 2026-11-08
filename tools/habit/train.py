@@ -15,6 +15,12 @@ the watch scores exactly what was trained. Sources:
                                nail biting against eating, smoking and staying still; face
                                touching is left out of training (touching is not picking). Each
                                user-activity recording is one sequence, all of it labelled.
+  --source wisdm --wisdm DIR  WISDM Smartphone and Smartwatch Activity and Biometrics (UCI 507):
+                               ~51 people, watch accelerometer + gyroscope at 20 Hz (raw/watch),
+                               3 min each of 18 everyday activities (brushing teeth, soup, chips,
+                               pasta, sandwich, drinking, typing, writing, clapping, folding,
+                               walking, ...), all negatives. Gyro aligned to the accelerometer by
+                               timestamp, averaged into 100 ms bins like the watch.
   --source cmi,stressense      Several sources together (subjects kept apart per source).
   --source synthetic           Generated sequences, to check the pipeline end to end.
 
@@ -135,6 +141,63 @@ def load_stressense(path, src_hz=50.0):
     return seqs, labels
 
 
+WISDM_ACTIVITIES = {
+    "A": "walking", "B": "jogging", "C": "stairs", "D": "sitting", "E": "standing",
+    "F": "typing", "G": "brushing teeth", "H": "eating soup", "I": "eating chips",
+    "J": "eating pasta", "K": "drinking from cup", "L": "eating sandwich", "M": "kicking",
+    "O": "playing catch", "P": "dribbling", "Q": "writing", "R": "clapping",
+    "S": "folding clothes",
+}
+
+
+def _read_wisdm(path):
+    df = pd.read_csv(path, header=None, names=["subject", "act", "t", "x", "y", "z"],
+                     dtype={"act": str}, skipinitialspace=True)
+    df["z"] = pd.to_numeric(df["z"].astype(str).str.rstrip(";"), errors="coerce")
+    return df.dropna()
+
+
+def load_wisdm(data_dir):
+    acc_dir = os.path.join(data_dir, "raw", "watch", "accel")
+    gyr_dir = os.path.join(data_dir, "raw", "watch", "gyro")
+    seqs, labels = [], []
+    for fn in sorted(os.listdir(acc_dir)):
+        if not fn.endswith(".txt"):
+            continue
+        subj = fn.split("_")[1]
+        acc = _read_wisdm(os.path.join(acc_dir, fn))
+        gyr = _read_wisdm(os.path.join(gyr_dir, fn.replace("accel", "gyro")))
+        for act, a in acc.groupby("act", sort=False):
+            g = gyr[gyr.act == act]
+            if len(a) < 200 or len(g) < 200:
+                continue
+            a = a.sort_values("t")
+            g = g.sort_values("t")
+            t = (a["t"].to_numpy() - a["t"].iloc[0]) / 1e9  # ns -> s
+            tg = (g["t"].to_numpy() - a["t"].iloc[0]) / 1e9
+            accv = a[["x", "y", "z"]].to_numpy(float) * 1000 / G
+            gyrv = np.stack([np.interp(t, tg, g[c].to_numpy(float)) for c in "xyz"], 1)
+            gyrv = np.degrees(gyrv) * 10  # rad/s -> 0.1 deg/s
+            # 100 ms bins by timestamp
+            b = np.floor(t * HZ).astype(int)
+            keep = b >= 0
+            b, accv, gyrv = b[keep], accv[keep], gyrv[keep]
+            n = b.max() + 1
+            cnt = np.bincount(b, minlength=n)
+            ok = cnt > 0
+            x = np.zeros((n, 6))
+            for i in range(3):
+                x[:, i] = np.bincount(b, weights=accv[:, i], minlength=n)
+                x[:, 3 + i] = np.bincount(b, weights=gyrv[:, i], minlength=n)
+            x = x[ok] / cnt[ok, None]
+            name = WISDM_ACTIVITIES.get(act, act)
+            seq = f"wi_{subj}_{act}"
+            seqs.append((seq, x, True))
+            labels.append(dict(seq=seq, subject=f"wi_{subj}", gesture=f"WISDM {name}", target=False,
+                               orientation="?", phase=np.array(["Performs gesture"] * len(x))))
+    return seqs, labels
+
+
 def load_synthetic(n_subjects=12, per=40, seed=1):
     rng = np.random.default_rng(seed)
     seqs, labels = [], []
@@ -229,12 +292,14 @@ def train_eval(df, args):
     from sklearn.model_selection import GroupKFold
 
     X, y, groups = df[FEATURES].to_numpy(), df["y"].to_numpy(), df["subject"].to_numpy()
+    # WISDM's many everyday windows would swamp the BFRB windows: weight them down
+    w = np.where(df["gesture"].str.startswith("WISDM"), args.wisdm_weight, 1.0)
     params = dict(objective="binary", n_estimators=args.trees, num_leaves=args.leaves,
                   max_depth=args.depth, learning_rate=0.1, min_child_samples=40,
                   subsample=0.8, subsample_freq=1, colsample_bytree=0.8, verbose=-1)
     oof = np.zeros(len(y))
     for tr, te in GroupKFold(n_splits=min(5, len(set(groups)))).split(X, y, groups):
-        m = lgb.LGBMClassifier(**params).fit(X[tr], y[tr])
+        m = lgb.LGBMClassifier(**params).fit(X[tr], y[tr], sample_weight=w[tr])
         oof[te] = m.predict_proba(X[te])[:, 1]
     auc = roc_auc_score(y, oof)
     # operating point: at most args.fpr of the look-alike windows flagged
@@ -242,7 +307,7 @@ def train_eval(df, args):
     thr = float(neg[int((1 - args.fpr) * (len(neg) - 1))])
     recall = float(np.mean(oof[y == 1] > thr))
     per_gesture = df.assign(p=oof > thr).groupby("gesture")["p"].mean().sort_values()
-    final = lgb.LGBMClassifier(**params).fit(X, y)
+    final = lgb.LGBMClassifier(**params).fit(X, y, sample_weight=w)
     df.assign(oof=oof)[["seq", "end", "subject", "gesture", "y", "oof"]].to_csv(
         os.path.join(args.out, "oof.csv"), index=False)
     return final, dict(auc=auc, threshold_prob=thr, recall_at_fpr=recall, fpr=args.fpr,
@@ -309,6 +374,8 @@ def load_sources(args):
             s_, l_ = load_cmi(args.data, args.src_hz)
         elif src == "stressense":
             s_, l_ = load_stressense(args.stressense, args.stressense_hz)
+        elif src == "wisdm":
+            s_, l_ = load_wisdm(args.wisdm)
         elif src == "synthetic":
             s_, l_ = load_synthetic()
         else:
@@ -324,6 +391,9 @@ def main():
                     help="cmi, stressense, synthetic, or several separated by commas")
     ap.add_argument("--stressense", help="StresSense stresSense.csv")
     ap.add_argument("--stressense-hz", type=float, default=50.0)
+    ap.add_argument("--wisdm", help="WISDM dataset directory (with raw/watch)")
+    ap.add_argument("--wisdm-weight", type=float, default=0.1,
+                    help="training weight of a WISDM window (they outnumber the BFRB windows ~15:1)")
     ap.add_argument("--data")
     ap.add_argument("--src-hz", type=float, default=10.0, help="CMI IMU sample rate")
     ap.add_argument("--features-cli", required=True, help="habit_features host binary")
