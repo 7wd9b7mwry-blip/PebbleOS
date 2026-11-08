@@ -5,6 +5,7 @@
 
 #include <string.h>
 
+#include <pbl/bluetooth/observer.h>
 #include <pbl/cron/cron.h>
 #include <pbl/drivers/gyro.h>
 #include <pbl/kernel/mutex.h>
@@ -16,6 +17,7 @@
 #include <pbl/services/habit/habit_features.h>
 #include <pbl/services/habit/habit_model.h>
 #include <pbl/services/habit/habit_policy.h>
+#include <pbl/services/habit/posture.h>
 #include <pbl/services/habit/sound_level.h>
 #ifdef CONFIG_SERVICE_MIC_MANAGER
 #include <pbl/services/mic_manager.h>
@@ -53,6 +55,10 @@ PBL_LOG_MODULE_DEFINE(service_habit, CONFIG_SERVICE_HABIT_LOG_LEVEL);
 #define BEACON_REFRESH_MIN 10   // battery level refresh; also re-arms after a Bluetooth restart
 #define SOUND_FRAME_SAMPLES 320   // 20 ms at 16 kHz
 #define SOUND_FRAMES 50           // one second a minute
+#define POSTURE_PERIOD_MS 10000   // a scan burst every 10 s ...
+#define POSTURE_BURST_MS 1200     // ... long enough for one 1 s advertisement of the tag
+#define POSTURE_PAIR_MIN_RSSI -65 // pairing: the tag must be right next to the watch
+#define WALKING_STEPS_PER_MIN 60  // a minute with this many steps teaches the upright reference
 #define GYRO_BUF 64             // > 2 s at 26 Hz
 #define GYRO_OFF_AFTER_MS 10000 // hand away from the head this long: gyro off again
 
@@ -99,6 +105,17 @@ static struct {
   uint8_t sound_frames;
   SoundLevelAcc sound_acc;
   int16_t sound_rms_db10, sound_peak_db10;
+  // back posture (Minew E8 tag)
+  bool posture_on;
+  bool posture_pairing;
+  uint8_t posture_tag[6];   // as on air (least significant byte first); all 0: none
+  PostureDetector posture;
+  TimerID posture_timer;
+  bool walking;
+  int32_t last_steps;
+  uint8_t tag_battery;
+  uint32_t posture_readings, posture_alerts, scans_ok, scans_failed;
+  int32_t last_scan_rc;
   uint8_t regions_calibrated;
   uint16_t minutes_since_save;
 } s;
@@ -124,6 +141,8 @@ static const char KEY_BASELINES[] = "baselines";
 static const char KEY_BEACON[] = "beacon";
 static const char KEY_SOUND[] = "sound";
 static const char KEY_MODEL[] = "model";
+static const char KEY_POSTURE[] = "posture";
+static const char KEY_POSTURE_TAG[] = "posture_tag";
 
 static bool prv_settings_get(const char *key, void *val, size_t len) {
   struct pbl_settings_file file;
@@ -194,6 +213,10 @@ static void prv_load_settings(void) {
   if (prv_settings_get(KEY_MODEL, &v, 1)) {
     s.det.cfg.use_model = v != 0;
   }
+  if (prv_settings_get(KEY_POSTURE, &v, 1)) {
+    s.posture_on = v != 0;
+  }
+  prv_settings_get(KEY_POSTURE_TAG, s.posture_tag, sizeof(s.posture_tag));
   BaselinesRecord b;
   if (prv_settings_get(KEY_BASELINES, &b, sizeof(b)) && b.version == SETTINGS_VERSION) {
     s.smart.rest_hr = b.rest_hr;
@@ -323,6 +346,121 @@ static void prv_sound_stop(void) {
 static void prv_sound_start(void) {}
 static void prv_sound_stop(void) {}
 #endif
+
+static bool prv_play(VibeProgramId program, uint32_t max_ms);
+
+// ---- back posture --------------------------------------------------------------------------------
+
+// filled on the Bluetooth host task during a burst, taken on KernelBG when it ends
+static PBL_MUTEX_DEFINE(s_scan_mutex);
+static struct {
+  int32_t sum[3];
+  uint16_t n;
+  uint8_t battery;
+  int8_t best_rssi;
+  uint8_t best_addr[6];
+  bool best_found;
+} s_scan;
+
+static bool prv_tag_set(void) {
+  static const uint8_t zero[6] = {0};
+  return memcmp(s.posture_tag, zero, sizeof(zero)) != 0;
+}
+
+static void prv_scan_report(const uint8_t addr[6], int8_t rssi, const uint8_t *data, uint8_t len,
+                            void *ctx) {
+  MinewAcc m;
+  if (!minew_acc_parse(data, len, &m)) {
+    return;
+  }
+  pbl_mutex_lock(&s_scan_mutex, PBL_FOREVER);
+  if (s.posture_pairing) {
+    if (rssi >= POSTURE_PAIR_MIN_RSSI && (!s_scan.best_found || rssi > s_scan.best_rssi)) {
+      s_scan.best_found = true;
+      s_scan.best_rssi = rssi;
+      memcpy(s_scan.best_addr, addr, 6);
+    }
+  } else if (memcmp(addr, s.posture_tag, 6) == 0) {
+    s_scan.sum[0] += m.acc_mg.x;
+    s_scan.sum[1] += m.acc_mg.y;
+    s_scan.sum[2] += m.acc_mg.z;
+    s_scan.n++;
+    s_scan.battery = m.battery_pct;
+  }
+  pbl_mutex_unlock(&s_scan_mutex);
+}
+
+static void prv_posture_burst_kbg(void *unused) {
+  pbl_mutex_lock(&s_scan_mutex, PBL_FOREVER);
+  const typeof(s_scan) got = s_scan;
+  memset(&s_scan, 0, sizeof(s_scan));
+  pbl_mutex_unlock(&s_scan_mutex);
+
+  if (s.posture_pairing) {
+    if (got.best_found) {
+      memcpy(s.posture_tag, got.best_addr, 6);
+      prv_settings_set(KEY_POSTURE_TAG, s.posture_tag, sizeof(s.posture_tag));
+      posture_forget_reference(&s.posture);
+      s.posture_pairing = false;
+      PBL_LOG_INFO("posture tag paired (rssi %d)", got.best_rssi);
+    }
+    return;
+  }
+  if (got.n == 0) {
+    return;
+  }
+  s.tag_battery = got.battery;
+  s.posture_readings++;
+  const HabitVec avg = {(int16_t)(got.sum[0] / got.n), (int16_t)(got.sum[1] / got.n),
+                        (int16_t)(got.sum[2] / got.n)};
+  const uint32_t now_s = (uint32_t)(pbl_uptime_ms() / 1000);
+  if (posture_feed(&s.posture, now_s, &avg, s.walking) && !s.playing &&
+      !vibe_pattern_is_owned_by(VibePatternOwner_Habit)) {
+    s.posture_alerts++;
+    prv_log(HabitLogKind_PostureAlert, 0, 0, (uint16_t)(s.posture.last_cos_x1000 + 1000), 0, 0);
+    prv_play(VibeProgram_Posture, 0);
+  }
+}
+
+static void prv_scan_done(void *ctx) {
+  system_task_add_callback(prv_posture_burst_kbg, nullptr);
+}
+
+static void prv_posture_tick_kbg(void *unused) {
+  if (!s.running || s.asleep) {
+    return;
+  }
+  if (!s.posture_pairing && !(s.posture_on && prv_tag_set())) {
+    return;
+  }
+  const int rc = pbl_bt_observer_scan(POSTURE_BURST_MS, prv_scan_report, prv_scan_done, nullptr);
+  s.last_scan_rc = rc;
+  if (rc == 0) {
+    s.scans_ok++;
+  } else {
+    s.scans_failed++;
+  }
+}
+
+static void prv_posture_timer_cb(void *unused) {
+  system_task_add_callback(prv_posture_tick_kbg, nullptr);
+}
+
+static void prv_posture_minute(void) {
+  int32_t steps = 0;
+  if (activity_get_metric(ActivityMetricStepCount, 1, &steps)) {
+    const int32_t delta = steps - s.last_steps;
+    s.walking = s.last_steps > 0 && delta >= WALKING_STEPS_PER_MIN;
+    s.last_steps = steps;
+  }
+  PostureMinute m;
+  posture_take_minute(&s.posture, &m);
+  if (m.readings > 0 || (s.posture_on && prv_tag_set())) {
+    prv_log(HabitLogKind_Posture, (uint8_t)(m.readings > 255 ? 255 : m.readings), m.slouched,
+            (uint16_t)(m.mean_cos_x1000 + 1000), (uint16_t)(m.min_cos_x1000 + 1000),
+            (uint32_t)s.tag_battery | ((uint32_t)m.calibrated << 8) | ((uint32_t)s.walking << 9));
+  }
+}
 
 // ---- presence beacon ----------------------------------------------------------------------------
 
@@ -552,6 +690,7 @@ static void prv_minute_kbg(void *unused) {
     prv_beacon_update();
   }
   prv_sound_start();
+  prv_posture_minute();
 }
 
 static void prv_minute_cb(struct pbl_cron_job *job, void *data) {
@@ -586,6 +725,8 @@ static void prv_start_kbg(void *unused) {
   pbl_cron_job_schedule(&s_minute_job);
   s.running = true;
   prv_beacon_update();
+  new_timer_start(s.posture_timer, POSTURE_PERIOD_MS, prv_posture_timer_cb, nullptr,
+                  TIMER_START_FLAG_REPEATING);
   PBL_LOG_INFO("started");
 }
 
@@ -597,6 +738,8 @@ static void prv_stop_kbg(void *unused) {
   pbl_cron_job_unschedule(&s_minute_job);
   prv_save_baselines();
   prv_sound_stop();
+  new_timer_stop(s.posture_timer);
+  pbl_bt_observer_stop();
   if (s.hrm != HRM_INVALID_SESSION_REF) {
     sys_hrm_manager_unsubscribe(s.hrm);
     s.hrm = HRM_INVALID_SESSION_REF;
@@ -632,6 +775,11 @@ void habit_service_init(void) {
   s.hrm = HRM_INVALID_SESSION_REF;
   s.beacon = true;
   s.sound = true;
+  s.posture_on = true;
+  s.posture_timer = new_timer_create();
+  PostureConfig pcfg;
+  posture_default_config(&pcfg);
+  posture_init(&s.posture, &pcfg);
   s.sound_rms_db10 = s.sound_peak_db10 = SOUND_LEVEL_FLOOR_DB10;
 }
 
@@ -754,6 +902,57 @@ void habit_service_set_model(bool on) {
   system_task_add_callback(prv_set_model_kbg, (void *)(uintptr_t)on);
 }
 
+static void prv_set_posture_kbg(void *on) {
+  prv_load_settings();
+  s.posture_on = on != NULL;
+  const uint8_t v = on ? 1 : 0;
+  prv_settings_set(KEY_POSTURE, &v, 1);
+  if (!s.posture_on) {
+    pbl_bt_observer_stop();
+  }
+}
+
+void habit_service_set_posture(bool on) {
+  system_task_add_callback(prv_set_posture_kbg, (void *)(uintptr_t)on);
+}
+
+static void prv_posture_pair_kbg(void *unused) {
+  prv_load_settings();
+  pbl_mutex_lock(&s_scan_mutex, PBL_FOREVER);
+  memset(&s_scan, 0, sizeof(s_scan));
+  s.posture_pairing = true;
+  pbl_mutex_unlock(&s_scan_mutex);
+}
+
+void habit_service_posture_pair(void) {
+  system_task_add_callback(prv_posture_pair_kbg, nullptr);
+}
+
+static uint8_t s_tag_arg[6];
+
+static void prv_posture_set_tag_kbg(void *unused) {
+  prv_load_settings();
+  for (int i = 0; i < 6; i++) {
+    s.posture_tag[i] = s_tag_arg[5 - i];  // stored as on air, least significant byte first
+  }
+  prv_settings_set(KEY_POSTURE_TAG, s.posture_tag, sizeof(s.posture_tag));
+  posture_forget_reference(&s.posture);
+  s.posture_pairing = false;
+}
+
+void habit_service_posture_set_tag(const uint8_t mac_msb_first[6]) {
+  memcpy(s_tag_arg, mac_msb_first, 6);
+  system_task_add_callback(prv_posture_set_tag_kbg, nullptr);
+}
+
+static void prv_posture_forget_kbg(void *unused) {
+  posture_forget_reference(&s.posture);
+}
+
+void habit_service_posture_forget(void) {
+  system_task_add_callback(prv_posture_forget_kbg, nullptr);
+}
+
 void habit_service_calibrate(HabitRegion region) {
   system_task_add_callback(prv_calibrate_kbg, (void *)(uintptr_t)region);
 }
@@ -789,4 +988,19 @@ void habit_service_get_status(HabitServiceStatus *st) {
   st->model_version = g_habit_model.version;
   st->model_score = s.det.model_score;
   st->model_threshold = s.det.cfg.model_threshold;
+  st->posture = s.posture_on;
+  st->posture_pairing = s.posture_pairing;
+  for (int i = 0; i < 6; i++) {
+    st->posture_tag[i] = s.posture_tag[5 - i];
+  }
+  st->posture_state = s.posture.state;
+  st->posture_calibrated = s.posture.calibrated;
+  st->posture_cos_x1000 = s.posture.last_cos_x1000;
+  st->posture_battery = s.tag_battery;
+  st->posture_readings = s.posture_readings;
+  st->posture_alerts = s.posture_alerts;
+  st->posture_scans_ok = s.scans_ok;
+  st->posture_scans_failed = s.scans_failed;
+  st->posture_last_scan_rc = s.last_scan_rc;
+  st->walking = s.walking;
 }

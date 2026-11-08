@@ -31,6 +31,10 @@ typedef enum {
   HabitLogKind_Minute = 5,        //!< a: bpm, b: RMSSD ms, c: motion mG, d: lux, e: sleep state
   HabitLogKind_Label = 6,         //!< a: label (wearer marked an episode / false alarm)
   HabitLogKind_Sound = 7,         //!< b: RMS, c: peak (tenths of dBFS + 1000), e: samples
+  HabitLogKind_Posture = 8,       //!< a: readings, b: slouched readings, c: mean cos + 1000,
+                                  //!< d: min cos + 1000 (tilt from upright, x1000),
+                                  //!< e: tag battery % | calibrated << 8 | walking << 9
+  HabitLogKind_PostureAlert = 9,  //!< c: cos + 1000 at the alert
 } HabitLogKind;
 
 //! One logged record, 16 bytes
@@ -81,6 +85,14 @@ void habit_service_set_beacon(bool on);
 void habit_service_set_sound(bool on);
 //! Classifier on (default) or off (the motion rule alone decides, e.g. if the model misbehaves).
 void habit_service_set_model(bool on);
+
+//! Back posture from an accelerometer tag (Minew E8) on the upper back, read in short scan
+//! bursts: on / off; pair with the strongest tag nearby (hold the watch next to it); set its
+//! address (most significant byte first); forget the learned upright reference (re-mounted).
+void habit_service_set_posture(bool on);
+void habit_service_posture_pair(void);
+void habit_service_posture_set_tag(const uint8_t mac_msb_first[6]);
+void habit_service_posture_forget(void);
 //! Forget the calibrated regions (back to the generic "hand at the head" default).
 void habit_service_reset_calibration(void);
 
@@ -106,6 +118,18 @@ typedef struct {
   const char *model_version;
   int32_t model_score;        //!< latest window's score, logit x 1024
   int32_t model_threshold;
+  bool posture;
+  bool posture_pairing;
+  uint8_t posture_tag[6];      //!< most significant byte first, all 0: none
+  uint8_t posture_state;       //!< PostureState
+  bool posture_calibrated;
+  int16_t posture_cos_x1000;   //!< latest tilt from upright
+  uint8_t posture_battery;
+  uint32_t posture_readings;
+  uint32_t posture_alerts;
+  uint32_t posture_scans_ok, posture_scans_failed;
+  int32_t posture_last_scan_rc;
+  bool walking;
 } HabitServiceStatus;
 
 void habit_service_get_status(HabitServiceStatus *status);

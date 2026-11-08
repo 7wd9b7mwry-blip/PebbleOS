@@ -29,6 +29,10 @@ static const VibeRamp s_habit_buzz[] = {
     {600, 100, 100}, {250, 0, 0}, {600, 100, 100},
 };
 
+static const VibeRamp s_posture[] = {
+    {300, 10, 55}, {300, 55, 10}, {250, 0, 0}, {300, 10, 55}, {300, 55, 10},
+};
+
 static const VibeProgram s_programs[VibeProgramCount] = {
     [VibeProgram_Calm] = {"calm", s_calm, ARRAY_LEN(s_calm), true},
     [VibeProgram_Sleep] = {"sleep", s_sleep, ARRAY_LEN(s_sleep), true},
@@ -37,6 +41,7 @@ static const VibeProgram s_programs[VibeProgramCount] = {
     [VibeProgram_HabitTap] = {"habit_tap", s_habit_tap, ARRAY_LEN(s_habit_tap), false},
     [VibeProgram_HabitPulse] = {"habit_pulse", s_habit_pulse, ARRAY_LEN(s_habit_pulse), false},
     [VibeProgram_HabitBuzz] = {"habit_buzz", s_habit_buzz, ARRAY_LEN(s_habit_buzz), false},
+    [VibeProgram_Posture] = {"posture", s_posture, ARRAY_LEN(s_posture), false},
 };
 
 const VibeProgram *vibe_program_get(VibeProgramId id) {

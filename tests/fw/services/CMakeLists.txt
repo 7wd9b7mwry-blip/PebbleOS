@@ -529,3 +529,8 @@ pbl_clar_test(test_habit_features
     fw/services/habit/habit_features.c
     fw/services/habit/habit_model.c
 )
+
+pbl_clar_test(test_posture
+  SOURCES
+    fw/services/habit/posture.c
+)

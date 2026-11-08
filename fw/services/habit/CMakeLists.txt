@@ -7,6 +7,7 @@ pbl_library_sources(
   habit_features.c
   habit_model.c
   habit_policy.c
+  posture.c
   sound_level.c
   vibe_program.c
   service.c

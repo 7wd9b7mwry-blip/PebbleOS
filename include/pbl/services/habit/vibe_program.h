@@ -27,6 +27,7 @@ typedef enum {
   VibeProgram_HabitTap,   //!< habit alert level 1: two light taps
   VibeProgram_HabitPulse, //!< level 2: three firmer taps
   VibeProgram_HabitBuzz,  //!< level 3: two strong buzzes
+  VibeProgram_Posture,    //!< back posture nudge: two gentle swells (unlike the habit taps)
   VibeProgramCount,
 } VibeProgramId;
 
