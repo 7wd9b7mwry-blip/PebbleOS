@@ -698,6 +698,12 @@
       "md_fn": "quick_launch_nothing_get_app_info"
     },
     {
+      "id": -300,
+      "enum": "VIBES",
+      "md_fn": "vibes_app_get_info",
+      "color_argb8": "GColorVividCeruleanARGB8"
+    },
+    {
       "id": -102,
       "enum": "TOUCH_TOGGLE",
       "md_fn": "touch_toggle_get_app_info",
