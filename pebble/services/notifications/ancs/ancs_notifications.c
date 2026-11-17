@@ -22,6 +22,9 @@
 #include <pbl/services/timeline/timeline.h>
 #include <pbl/services/timeline/timeline_resources.h>
 #include <pbl/util/pstring.h>
+#ifdef CONFIG_SERVICE_HABIT
+#include <pbl/services/habit/habit_service.h>
+#endif
 
 #include <comm/ble/kernel_le_client/ancs/ancs_types.h>
 
@@ -300,6 +303,32 @@ static bool prv_should_ignore_notification(uint32_t uid, time_t timestamp,
   return false;
 }
 
+#ifdef CONFIG_SERVICE_HABIT
+// A Home Assistant notification titled "PDB <command>" is a command for the habit service (sleep vibes at bedtime,
+// no habit alerts in bed): run it, don't show it. Only from the Home Assistant app, and not when replayed after a
+// reconnect (a stale command).
+#define HABIT_COMMAND_APP_ID "io.robbie.HomeAssistant"
+static bool prv_handle_habit_command(const ANCSAttribute *app_id, const ANCSAttribute *title, bool recovered) {
+  static const char prefix[] = "PDB ";
+  const size_t plen = sizeof(prefix) - 1;
+  if (!title || title->length <= plen || title->length > 64 || memcmp(title->value, prefix, plen) != 0) {
+    return false;
+  }
+  const size_t alen = strlen(HABIT_COMMAND_APP_ID);
+  if (app_id->length != alen || memcmp(app_id->value, HABIT_COMMAND_APP_ID, alen) != 0) {
+    return false;
+  }
+  if (!recovered) {
+    char cmd[64];
+    const size_t n = title->length - plen;
+    memcpy(cmd, title->value + plen, n);
+    cmd[n] = ' ';
+    habit_service_command(cmd);
+  }
+  return true;
+}
+#endif
+
 void ancs_notifications_handle_message(uint32_t uid, ANCSProperty properties,
                                        ANCSAttribute **notif_attributes,
                                        ANCSAttribute **app_attributes) {
@@ -331,6 +360,11 @@ void ancs_notifications_handle_message(uint32_t uid, ANCSProperty properties,
   }
 
   const bool is_recovered = (properties & ANCSProperty_Recovered);
+#ifdef CONFIG_SERVICE_HABIT
+  if (prv_handle_habit_command(app_id, title, is_recovered)) {
+    goto cleanup;
+  }
+#endif
   if (is_recovered) {
     const bool has_valid_date = date && (ancs_notifications_util_parse_timestamp(date) != 0);
     if (prv_should_ignore_because_not_missed(has_valid_date, timestamp)) {

@@ -100,6 +100,7 @@ static struct {
   // counters
   uint32_t episodes, alerts, smart_vibes;
   uint16_t last_rmssd;   // the last minute's HRV (beacon)
+  uint64_t quiet_until_ms;   // habit alerts paused until (in bed, in the bathroom: from Home Assistant)
   bool beacon_vitals;    // the beacon alternates detector / vitals pages
   bool settings_loaded;
   bool beacon;
@@ -673,7 +674,7 @@ static void prv_accel_cb(AccelData *data, uint32_t num_samples) {
     }
     VibeRequest req;
     if (habit_response_on_event(&s.resp, t_ms, e, &ep, &req) &&
-        (!s.asleep || s.alerts_while_asleep)) {
+        (!s.asleep || s.alerts_while_asleep) && pbl_uptime_ms() >= s.quiet_until_ms) {
       s.alerts++;
       prv_log(HabitLogKind_Alert, req.program, s.resp.level, 0, 0, 0);
       prv_play(req.program, req.max_ms);
@@ -900,6 +901,73 @@ void habit_service_init(void) {
   sccfg.period_s = POSTURE_PERIOD_MS / 1000;
   posture_scan_init(&s.scanner, &sccfg);
   s.sound_rms_db10 = s.sound_peak_db10 = SOUND_LEVEL_FLOOR_DB10;
+}
+
+static void prv_set_quiet_kbg(void *minutes) {
+  const uint32_t m = (uint32_t)(uintptr_t)minutes;
+  s.quiet_until_ms = m ? pbl_uptime_ms() + (uint64_t)m * 60 * 1000 : 0;
+  PBL_LOG_INFO("alerts quiet for %" PRIu32 " min", m);
+}
+
+void habit_service_set_quiet(uint32_t minutes) {
+  pbl_sys_work_call(prv_set_quiet_kbg, (void *)(uintptr_t)minutes);
+}
+
+// the next space-separated word of *p (at most n-1 chars) into out; advances *p
+static void prv_word(const char **p, char *out, size_t n) {
+  while (**p == ' ') {
+    (*p)++;
+  }
+  size_t i = 0;
+  while (**p && **p != ' ') {
+    if (i + 1 < n) {
+      out[i++] = **p;
+    }
+    (*p)++;
+  }
+  out[i] = ' ';
+}
+
+static uint32_t prv_number(const char *w, uint32_t fallback) {
+  if (!*w) {
+    return fallback;
+  }
+  uint32_t v = 0;
+  for (; *w >= '0' && *w <= '9'; w++) {
+    v = v * 10 + (uint32_t)(*w - '0');
+  }
+  return v;
+}
+
+void habit_service_command(const char *cmd) {
+  char verb[12], what[16], arg[8];
+  const char *p = cmd;
+  prv_word(&p, verb, sizeof(verb));
+  prv_word(&p, what, sizeof(what));
+  prv_word(&p, arg, sizeof(arg));
+  if (strcmp(verb, "vibe") == 0) {
+    if (strcmp(what, "stop") == 0) {
+      habit_service_stop();
+      return;
+    }
+    for (int i = 0; i < VibeProgramCount; i++) {
+      const VibeProgram *prog = vibe_program_get(i);
+      if (prog && prog->loops && strcmp(prog->name, what) == 0) {
+        const uint32_t minutes = prv_number(arg, 15);
+        habit_service_play((VibeProgramId)i, (minutes > 120 ? 120 : minutes) * 60 * 1000);
+        return;
+      }
+    }
+  } else if (strcmp(verb, "quiet") == 0) {
+    if (strcmp(what, "off") == 0) {
+      habit_service_set_quiet(0);
+    } else if (strcmp(what, "on") == 0) {
+      const uint32_t minutes = prv_number(arg, 60);
+      habit_service_set_quiet(minutes > 720 ? 720 : minutes);
+    }
+    return;
+  }
+  PBL_LOG_WRN("unknown command");
 }
 
 void habit_service_set_enabled(bool enabled) {

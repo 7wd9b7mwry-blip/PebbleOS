@@ -69,6 +69,14 @@ void habit_service_set_enabled(bool enabled);
 bool habit_service_play(VibeProgramId program, uint32_t max_ms);
 void habit_service_stop(void);
 
+//! No habit alerts for `minutes` (0: alerts again now). Detection and logging go on.
+void habit_service_set_quiet(uint32_t minutes);
+
+//! A command from Home Assistant (a notification titled "PDB <command>", see ancs_notifications.c):
+//! "vibe <program> [minutes]" plays a program (calm, relax, meditate, sleep, focus, energy; default 15 min),
+//! "vibe stop" stops it, "quiet on [minutes]" pauses the habit alerts (default 60 min), "quiet off" ends that.
+void habit_service_command(const char *cmd);
+
 //! Calibration: the hand is at `region` now; store the current forearm direction.
 void habit_service_calibrate(HabitRegion region);
 
