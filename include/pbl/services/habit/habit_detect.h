@@ -46,6 +46,7 @@ typedef struct {
   uint16_t max_gross_mg;           //!< more gross motion than this: not a habit (walking, waving)
   uint16_t min_fine_gyro_dps10;    //!< with the gyro: wrist rotation needed (0.1 deg/s units)
   bool gyro_required;              //!< fine motion must be wrist rotation (holding a phone shakes, it doesn't turn)
+  uint16_t gyro_tau_ms;            //!< smoothing of the wrist rotation level (0: the accel's 500 ms)
   uint16_t min_gravity_mg;         //!< gravity magnitude sanity band (free fall / impacts)
   uint16_t max_gravity_mg;
   bool use_model;                  //!< episodes also need the classifier (habit_model) to agree

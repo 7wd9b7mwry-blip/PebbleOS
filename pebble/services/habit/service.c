@@ -816,12 +816,18 @@ void habit_service_init(void) {
   // hand resting (0.06, 0.96, -0.26) and holding the phone (-0.9, 0.4, -0.2) / (-0.22, 0.9, -0.37) differ in motion
   // rather than angle from biting: the phone shakes (fine accel 15-120 mg) but barely turns (gyro under 14 deg/s),
   // biting and picking turn the wrist 15-200 deg/s. So: 32 deg cones, and the fine motion must be rotation (30 deg/s).
+  // Biting rolls the wrist to bring each nail up (gravity swung from (-0.76, 0.59, -0.25) to (-0.81, 0.04, -0.58) and
+  // (-0.83, -0.33, -0.45) within seconds) while the forearm stays raised: the mouth region is the raised forearm (-x)
+  // at any roll, 50 deg.
   dcfg.regions[HabitRegion_Mouth] = (HabitRegionProto){
-      .enabled = true, .gravity = {.x = -645, .y = 751, .z = -149}, .cos_min_x1000 = 848};
+      .enabled = true, .gravity = {.x = -1000, .y = 0, .z = 0}, .cos_min_x1000 = 643};
   dcfg.regions[HabitRegion_Face] = (HabitRegionProto){
       .enabled = true, .gravity = {.x = -616, .y = 212, .z = 759}, .cos_min_x1000 = 848};
+  // Moment to moment, biting's rotation overlaps the phone's; averaged over ~4 s biting runs ~35 deg/s (the small rolls
+  // between nails), the phone ~4-5 deg/s.
   dcfg.gyro_required = true;
-  dcfg.min_fine_gyro_dps10 = 300;
+  dcfg.gyro_tau_ms = 4000;
+  dcfg.min_fine_gyro_dps10 = 150;
   // The classifier (trained on other people's wrist data) rejected every window on this watch: episodes come from
   // the region and the fine motion until it is retrained on the wearer's labelled windows ("habit model on").
   dcfg.use_model = false;

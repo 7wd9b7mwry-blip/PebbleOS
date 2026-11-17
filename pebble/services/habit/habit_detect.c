@@ -253,7 +253,7 @@ HabitEvent habit_detect_feed(HabitDetector *d, uint32_t t_ms, const HabitVec *ac
     if (gyro) {
       d->last_gyro = *gyro;
       const int32_t gmag = (abs(gyro->x) + abs(gyro->y) + abs(gyro->z)) * FX;
-      d->gyro_fine = prv_lp(d->gyro_fine, gmag, prv_div(FINE_TAU_MS, hz));
+      d->gyro_fine = prv_lp(d->gyro_fine, gmag, prv_div(d->cfg.gyro_tau_ms ? d->cfg.gyro_tau_ms : FINE_TAU_MS, hz));
       d->have_gyro = true;
     }
   }
@@ -333,7 +333,7 @@ void habit_detect_feed_gyro(HabitDetector *d, const HabitVec *gyro, bool vibrati
   }
   d->last_gyro = *gyro;
   const int32_t gmag = (abs(gyro->x) + abs(gyro->y) + abs(gyro->z)) * FX;
-  d->gyro_fine = d->have_gyro ? prv_lp(d->gyro_fine, gmag, prv_div(FINE_TAU_MS, d->cfg.sample_hz))
+  d->gyro_fine = d->have_gyro ? prv_lp(d->gyro_fine, gmag, prv_div(d->cfg.gyro_tau_ms ? d->cfg.gyro_tau_ms : FINE_TAU_MS, d->cfg.sample_hz))
                               : gmag;
   d->have_gyro = true;
 }
