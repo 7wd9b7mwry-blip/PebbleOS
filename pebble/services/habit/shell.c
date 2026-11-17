@@ -71,7 +71,7 @@ static int prv_cmd_play(const struct pbl_shell *sh, size_t argc, char **argv) {
     pbl_shell_error(sh, "invalid seconds '%s'", argv[2]);
     return -EINVAL;
   }
-  habit_service_play((VibeProgramId)p, (uint32_t)seconds * 1000);
+  habit_service_play_from((VibeProgramId)p, (uint32_t)seconds * 1000, 6 /* AirSource_Console */, false);
   return 0;
 }
 

@@ -3,6 +3,8 @@
 
 #include <pbl/services/habit/habit_service.h>
 
+#include <pbl/services/habit/air_log.h>
+
 #include <string.h>
 
 #include <pbl/bluetooth/observer.h>
@@ -29,6 +31,7 @@
 #include <pbl/services/time.h>
 #include <pbl/services/vibe_pattern.h>
 #include <pbl/settings/settings.h>
+#include <pbl/util/rand32.h>
 #include <pbl/util/uuid.h>
 
 #include <applib/accel_service_private.h>
@@ -50,7 +53,11 @@ PBL_LOG_MODULE_DEFINE(service_habit, CONFIG_SERVICE_HABIT_LOG_LEVEL);
 #define SETTINGS_MAX_SIZE 2048
 #define SETTINGS_VERSION 1
 #define BASELINE_SAVE_MIN 60    // learned baselines are saved hourly
-#define BEACON_INTERVAL_MS 1000
+#define BEACON_INTERVAL_MS 250   // each page (changed every second) goes out ~4 times: the receivers miss many
+#define AIR_LOG_CAP 512          // records kept for the replay (~8 h of minutes with the events)
+#define AIR_NEW_SENDS 3
+#define VITALS_EVERY 10          // beacon slots: odd = detector page, every VITALS_EVERY-th the vitals page
+#define HOLDOUT_PCT_DEFAULT 25   // trial vibes held out (logged, not played): how the effect is measured
 #define BEACON_REFRESH_MIN 10   // battery level refresh; also re-arms after a Bluetooth restart
 #define SOUND_FRAME_SAMPLES 320   // 20 ms at 16 kHz
 #define SOUND_FRAMES 50           // one second a minute
@@ -101,7 +108,17 @@ static struct {
   uint32_t episodes, alerts, smart_vibes;
   uint16_t last_rmssd;   // the last minute's HRV (beacon)
   uint64_t quiet_until_ms;   // habit alerts paused until (in bed, in the bathroom: from Home Assistant)
-  bool beacon_vitals;    // the beacon alternates detector / vitals pages
+  uint32_t beacon_slot;  // the beacon rotates log / detector / vitals pages, one a second
+  // the wave program playing (calm, sleep...), for its end record
+  bool wave_on;
+  VibeProgramId wave_program;
+  uint64_t wave_started_ms;
+  uint8_t holdout_pct;
+  // this minute, for the air log's minute record
+  int32_t grav_sum[3];
+  uint16_t grav_n;
+  uint8_t near_s;
+  bool sound_new;
   bool settings_loaded;
   bool beacon;
   uint8_t beacon_minutes;
@@ -131,6 +148,14 @@ static struct {
 static void prv_refill_work(struct pbl_work *work);
 static PBL_DELAYED_WORK_DEFINE(s_refill_work, prv_refill_work);
 
+static AirRecord s_air_recs[AIR_LOG_CAP];
+static uint8_t s_air_sends[AIR_LOG_CAP];
+static AirLog s_air;
+
+static void prv_air(AirKind kind, uint8_t a, uint8_t b, uint16_t c, uint16_t d, uint32_t e) {
+  air_log_event(&s_air, (uint32_t)pbl_realtime(), (uint8_t)kind, a, b, c, d, e);
+}
+
 // ---- settings ---------------------------------------------------------------------------------
 
 typedef struct PBL_PACKED {
@@ -154,6 +179,7 @@ static const char KEY_SOUND[] = "sound";
 static const char KEY_MODEL[] = "model";
 static const char KEY_POSTURE[] = "posture";
 static const char KEY_POSTURE_TAG[] = "posture_tag";
+static const char KEY_HOLDOUT[] = "holdout";
 
 static bool prv_settings_get(const char *key, void *val, size_t len) {
   struct pbl_settings_file file;
@@ -228,6 +254,9 @@ static void prv_load_settings(void) {
     s.posture_on = v != 0;
   }
   prv_settings_get(KEY_POSTURE_TAG, s.posture_tag, sizeof(s.posture_tag));
+  if (prv_settings_get(KEY_HOLDOUT, &v, 1) && v <= 100) {
+    s.holdout_pct = v;
+  }
   BaselinesRecord b;
   if (prv_settings_get(KEY_BASELINES, &b, sizeof(b)) && b.version == SETTINGS_VERSION) {
     s.smart.rest_hr = b.rest_hr;
@@ -311,6 +340,7 @@ static void prv_sound_done_kbg(void *unused) {
   s.sound_capturing = false;
   s.sound_rms_db10 = sound_level_rms_db10(&s.sound_acc);
   s.sound_peak_db10 = sound_level_peak_db10(&s.sound_acc);
+  s.sound_new = true;
   prv_log(HabitLogKind_Sound, 0, (uint16_t)(s.sound_rms_db10 + 1000),
           (uint16_t)(s.sound_peak_db10 + 1000), 0, s.sound_acc.n);
 }
@@ -358,7 +388,7 @@ static void prv_sound_start(void) {}
 static void prv_sound_stop(void) {}
 #endif
 
-static bool prv_play(VibeProgramId program, uint32_t max_ms);
+static bool prv_play(VibeProgramId program, uint32_t max_ms, AirSource source, uint8_t level);
 
 // ---- back posture --------------------------------------------------------------------------------
 
@@ -432,7 +462,8 @@ static void prv_posture_burst_kbg(void *unused) {
       !vibe_pattern_is_owned_by(VibePatternOwner_Habit)) {
     s.posture_alerts++;
     prv_log(HabitLogKind_PostureAlert, 0, 0, (uint16_t)(s.posture.last_cos_x1000 + 1000), 0, 0);
-    prv_play(VibeProgram_Posture, 0);
+    prv_air(AirKind_PostureAlert, 0, 0, (uint16_t)(s.posture.last_cos_x1000 + 1000), 0, 0);
+    prv_play(VibeProgram_Posture, 0, AirSource_Posture, 0);
   }
 }
 
@@ -470,15 +501,26 @@ static void prv_posture_work(struct pbl_work *work) {
   }
 }
 
-static void prv_posture_minute(void) {
+// steps since the last minute (the day's count resets at midnight: 0 then)
+static uint8_t prv_steps_minute(void) {
   int32_t steps = 0;
+  int32_t delta = 0;
   if (activity_get_metric(ActivityMetricStepCount, 1, &steps)) {
-    const int32_t delta = steps - s.last_steps;
-    s.walking = s.last_steps > 0 && delta >= WALKING_STEPS_PER_MIN;
+    delta = s.last_steps > 0 && steps >= s.last_steps ? steps - s.last_steps : 0;
+    s.walking = delta >= WALKING_STEPS_PER_MIN;
     s.last_steps = steps;
   }
+  return (uint8_t)(delta > 255 ? 255 : delta);
+}
+
+static void prv_posture_minute(void) {
   PostureMinute m;
   posture_take_minute(&s.posture, &m);
+  if (m.readings > 0) {
+    prv_air(AirKind_Posture, (uint8_t)(m.readings > 255 ? 255 : m.readings), (uint8_t)(m.slouched > 255 ? 255 : m.slouched),
+            (uint16_t)(m.mean_cos_x1000 + 1000), (uint16_t)(m.min_cos_x1000 + 1000),
+            (uint32_t)s.tag_battery | ((uint32_t)m.calibrated << 8) | ((uint32_t)s.walking << 9));
+  }
   if (m.readings > 0 || (s.posture_on && prv_tag_set())) {
     prv_log(HabitLogKind_Posture, (uint8_t)(m.readings > 255 ? 255 : m.readings), m.slouched,
             (uint16_t)(m.mean_cos_x1000 + 1000), (uint16_t)(m.min_cos_x1000 + 1000),
@@ -499,11 +541,23 @@ static void prv_beacon_update(void) {
   // second from the accel callback, so detection can be tuned on the watch from Home Assistant): count 0x09 x3 (state
   // bits, episodes, alerts), count 0x3D x2 (fine motion mg, gyro fine 0.1 deg/s), signed count 0x5A x3 (gravity x y z
   // mg). Objects in ascending id order; 31 bytes, so no name (HA knows it by address).
-  // every other second the vitals page instead (smart vibes can be checked on the watch): count 0x09 x4 (0x80 | asleep
+  // every other second the air log's page (air_log.h: manufacturer data), now and then the vitals page (smart vibes
+  // can be checked on the watch): count 0x09 x4 (0x80 | asleep
   // | off wrist << 1, heart rate, resting / sleeping baselines), count 0x3D x3 (the last minute's RMSSD ms, smart vibes
   // played, seconds since the last heart rate reading)
-  s.beacon_vitals = !s.beacon_vitals;
-  if (s.beacon_vitals) {
+  const uint32_t slot = s.beacon_slot++;
+  AirRecord rec;
+  if (slot % 2 == 0 && air_log_next(&s_air, &rec)) {
+    uint8_t lbuf[sizeof(struct pbl_bt_ad_data) + AIR_LOG_ADV_LEN];
+    struct pbl_bt_ad_data *ldata = (struct pbl_bt_ad_data *)lbuf;
+    ldata->ad_data_length = AIR_LOG_ADV_LEN;
+    ldata->scan_resp_data_length = 0;
+    air_log_encode(&s_air, &rec, ldata->data);
+    gap_le_advert_set_beacon(ldata, BEACON_INTERVAL_MS);
+    s.beacon_minutes = 0;
+    return;
+  }
+  if (slot % (2 * VITALS_EVERY) == 1) {
     uint8_t rest = 0, sleep = 0;
     uint16_t base_rmssd = 0;
     smart_vibes_baselines(&s.smart, &rest, &sleep, &base_rmssd);
@@ -576,6 +630,15 @@ static void prv_log_window(void) {
 
 // ---- player -----------------------------------------------------------------------------------
 
+static void prv_wave_end(AirEnd why) {
+  if (!s.wave_on) {
+    return;
+  }
+  s.wave_on = false;
+  prv_air(AirKind_PlayEnd, (uint8_t)s.wave_program, (uint8_t)why, 0, 0,
+          (uint32_t)(pbl_uptime_ms() - s.wave_started_ms));
+}
+
 static void prv_refill(void) {
   if (!s.playing) {
     return;
@@ -595,6 +658,7 @@ static void prv_refill(void) {
         continue;
       }
       s.playing = false;  // the program is over (the queued tail finishes by itself)
+      prv_wave_end(AirEnd_Done);
       pbl_delayed_work_cancel(&s_refill_work);
       return;
     }
@@ -603,6 +667,7 @@ static void prv_refill(void) {
       PBL_LOG_DBG("program %s preempted", s.player.program->name);
       s.playing = false;
       s.resume = false;
+      prv_wave_end(AirEnd_Preempted);
       pbl_delayed_work_cancel(&s_refill_work);
       return;
     }
@@ -617,10 +682,17 @@ static void prv_refill_work(struct pbl_work *work) {
   }
 }
 
-static bool prv_play(VibeProgramId program, uint32_t max_ms) {
+static bool prv_play(VibeProgramId program, uint32_t max_ms, AirSource source, uint8_t level) {
   const VibeProgram *p = vibe_program_get(program);
   if (!p) {
     return false;
+  }
+  prv_air(AirKind_Play, (uint8_t)program, (uint8_t)source, level, 0, max_ms);
+  if (p->loops) {
+    prv_wave_end(AirEnd_Replaced);
+    s.wave_on = true;
+    s.wave_program = program;
+    s.wave_started_ms = pbl_uptime_ms();
   }
   // an alert or nudge over a wave program: the program resumes after it (a new wave program replaces it)
   if (!p->loops && s.playing && s.player.program && s.player.program->loops) {
@@ -648,6 +720,7 @@ static bool prv_play(VibeProgramId program, uint32_t max_ms) {
 }
 
 static void prv_stop(void) {
+  prv_wave_end(AirEnd_Stopped);
   s.playing = false;
   s.resume = false;
   pbl_delayed_work_cancel(&s_refill_work);
@@ -669,21 +742,33 @@ static void prv_accel_cb(AccelData *data, uint32_t num_samples) {
     if (e == HabitEvent_Start) {
       s.episodes++;
       prv_log(HabitLogKind_EpisodeStart, ep.region, ep.confidence, 0, 0, ep.duration_ms);
+      prv_air(AirKind_EpisodeStart, ep.region, ep.confidence, 0, 0,
+              ep.duration_ms);
     } else if (e == HabitEvent_End) {
       prv_log(HabitLogKind_EpisodeEnd, ep.region, ep.confidence, 0, 0, ep.duration_ms);
+      prv_air(AirKind_EpisodeEnd, ep.region, ep.confidence, 0, 0,
+              ep.duration_ms);
     }
     VibeRequest req;
     if (habit_response_on_event(&s.resp, t_ms, e, &ep, &req) &&
         (!s.asleep || s.alerts_while_asleep) && pbl_uptime_ms() >= s.quiet_until_ms) {
       s.alerts++;
       prv_log(HabitLogKind_Alert, req.program, s.resp.level, 0, 0, 0);
-      prv_play(req.program, req.max_ms);
+      prv_play(req.program, req.max_ms, AirSource_Alert, s.resp.level);
     }
   }
   uint16_t fine;
-  habit_detect_levels(&s.det, NULL, NULL, &fine, NULL);
+  HabitVec grav;
+  habit_detect_levels(&s.det, &grav, NULL, &fine, NULL);
   s.motion_sum += fine;
   s.motion_n++;
+  s.grav_sum[0] += grav.x;
+  s.grav_sum[1] += grav.y;
+  s.grav_sum[2] += grav.z;
+  s.grav_n++;
+  if (habit_detect_current_region(&s.det) != HabitRegion_None && s.near_s < 255) {
+    s.near_s++;
+  }
   prv_log_window();
   prv_gyro_update();
   prv_beacon_update();   // the live detector state (about once a second)
@@ -737,6 +822,41 @@ static void prv_hr_interval_update(void) {
   }
 }
 
+static uint8_t prv_db_byte(int16_t db10) {
+  const int v = db10 / 10 + 128;
+  return (uint8_t)(v < 1 ? 1 : (v > 255 ? 255 : v));
+}
+
+static int8_t prv_grav8(int32_t sum, uint16_t n) {
+  const int32_t v = n ? sum / n / 8 : 0;
+  return (int8_t)(v < -127 ? -127 : (v > 127 ? 127 : v));
+}
+
+static void prv_air_minute(time_t now, const SmartVibeInput *in, uint16_t rmssd, uint16_t motion, uint32_t lux,
+                           int32_t sleep_state) {
+  const AirMinute m = {
+      .hr = in->hr_bpm,
+      .rmssd = (uint8_t)(rmssd > 255 ? 255 : rmssd),
+      .lux = (uint16_t)(lux > 0xFFFF ? 0xFFFF : lux),
+      .state = (uint8_t)(((uint32_t)sleep_state & 7) | (s.off_wrist << 3) |
+                         ((pbl_uptime_ms() < s.quiet_until_ms) << 4) | (s.playing << 5) | (s.gyro_on << 6)),
+      .motion = (uint8_t)(motion > 255 ? 255 : motion),
+      .steps = prv_steps_minute(),
+      .sound_rms = s.sound_new ? prv_db_byte(s.sound_rms_db10) : 0,
+      .sound_peak = s.sound_new ? prv_db_byte(s.sound_peak_db10) : 0,
+      .gx = prv_grav8(s.grav_sum[0], s.grav_n),
+      .gy = prv_grav8(s.grav_sum[1], s.grav_n),
+      .gz = prv_grav8(s.grav_sum[2], s.grav_n),
+      .near_s = s.near_s,
+  };
+  // stamped with the minute it describes (the one just over)
+  air_log_push(&s_air, (uint32_t)(now / 60 * 60 - 60), AirKind_Minute, &m, sizeof(m));
+  s.sound_new = false;
+  memset(s.grav_sum, 0, sizeof(s.grav_sum));
+  s.grav_n = 0;
+  s.near_s = 0;
+}
+
 static void prv_minute_kbg(void *unused) {
   if (!s.running) {
     return;
@@ -770,11 +890,16 @@ static void prv_minute_kbg(void *unused) {
   if (smart_vibes_on_minute(&s.smart, &in, &req) && !s.playing &&
       !vibe_pattern_is_owned_by(VibePatternOwner_Habit)) {
     s.smart_vibes++;
-    prv_log(HabitLogKind_SmartVibe, req.program, 0, 0, 0, req.max_ms);
-    prv_play(req.program, req.max_ms);
+    if (pbl_rand32() % 100 < s.holdout_pct) {
+      prv_air(AirKind_Holdout, (uint8_t)req.program, AirSource_Smart, 0, 0, req.max_ms);
+    } else {
+      prv_log(HabitLogKind_SmartVibe, req.program, 0, 0, 0, req.max_ms);
+      prv_play(req.program, req.max_ms, AirSource_Smart, 0);
+    }
   }
   prv_log(HabitLogKind_Minute, in.hr_bpm, rmssd, motion, (uint16_t)(lux > 0xFFFF ? 0xFFFF : lux),
           (uint32_t)sleep_state);
+  prv_air_minute(now, &in, rmssd, motion, lux, sleep_state);
 
   s.bpm_new = false;
   prv_hr_interval_update();
@@ -823,6 +948,7 @@ static void prv_start_kbg(void *unused) {
                                               false /*low_latency*/, prv_hrm_cb, nullptr);
   pbl_cron_job_schedule(&s_minute_job);
   s.running = true;
+  prv_air(AirKind_Boot, 0, 0, 0, 0, 0);
   prv_beacon_update();
   pbl_delayed_work_reschedule(&pbl_sys_workq, &s_posture_work, PBL_MSEC(POSTURE_PERIOD_MS));
   PBL_LOG_INFO("started");
@@ -859,6 +985,8 @@ static void prv_stop_kbg(void *unused) {
 
 void habit_service_init(void) {
   memset(&s, 0, sizeof(s));
+  air_log_init(&s_air, s_air_recs, s_air_sends, AIR_LOG_CAP, AIR_NEW_SENDS);
+  s.holdout_pct = HOLDOUT_PCT_DEFAULT;
   HabitConfig dcfg;
   habit_detect_default_config(&dcfg);
   dcfg.sample_hz = SAMPLE_HZ;
@@ -906,6 +1034,7 @@ void habit_service_init(void) {
 static void prv_set_quiet_kbg(void *minutes) {
   const uint32_t m = (uint32_t)(uintptr_t)minutes;
   s.quiet_until_ms = m ? pbl_uptime_ms() + (uint64_t)m * 60 * 1000 : 0;
+  prv_air(AirKind_Quiet, 0, 0, (uint16_t)m, 0, 0);
   PBL_LOG_INFO("alerts quiet for %" PRIu32 " min", m);
 }
 
@@ -940,11 +1069,12 @@ static uint32_t prv_number(const char *w, uint32_t fallback) {
 }
 
 void habit_service_command(const char *cmd) {
-  char verb[12], what[16], arg[8];
+  char verb[12], what[16], arg[8], flag[8];
   const char *p = cmd;
   prv_word(&p, verb, sizeof(verb));
   prv_word(&p, what, sizeof(what));
   prv_word(&p, arg, sizeof(arg));
+  prv_word(&p, flag, sizeof(flag));
   if (strcmp(verb, "vibe") == 0) {
     if (strcmp(what, "stop") == 0) {
       habit_service_stop();
@@ -954,10 +1084,15 @@ void habit_service_command(const char *cmd) {
       const VibeProgram *prog = vibe_program_get(i);
       if (prog && prog->loops && strcmp(prog->name, what) == 0) {
         const uint32_t minutes = prv_number(arg, 15);
-        habit_service_play((VibeProgramId)i, (minutes > 120 ? 120 : minutes) * 60 * 1000);
+        // "trial": part of the experiment (a share held out, see HOLDOUT_PCT_DEFAULT)
+        habit_service_play_from((VibeProgramId)i, (minutes > 120 ? 120 : minutes) * 60 * 1000, AirSource_Command,
+                                strcmp(flag, "trial") == 0);
         return;
       }
     }
+  } else if (strcmp(verb, "holdout") == 0) {
+    habit_service_set_holdout((uint8_t)prv_number(what, HOLDOUT_PCT_DEFAULT));
+    return;
   } else if (strcmp(verb, "quiet") == 0) {
     if (strcmp(what, "off") == 0) {
       habit_service_set_quiet(0);
@@ -978,21 +1113,43 @@ void habit_service_set_enabled(bool enabled) {
 typedef struct {
   VibeProgramId program;
   uint32_t max_ms;
+  uint8_t source;
+  bool trial;
 } PlayArgs;
 
 static PlayArgs s_play_args;
 
 static void prv_play_kbg(void *unused) {
-  prv_play(s_play_args.program, s_play_args.max_ms);
+  const PlayArgs a = s_play_args;
+  if (a.trial && pbl_rand32() % 100 < s.holdout_pct) {
+    prv_air(AirKind_Holdout, (uint8_t)a.program, a.source, 0, 0, a.max_ms);
+    return;
+  }
+  prv_play(a.program, a.max_ms, (AirSource)a.source, 0);
 }
 
-bool habit_service_play(VibeProgramId program, uint32_t max_ms) {
+bool habit_service_play_from(VibeProgramId program, uint32_t max_ms, uint8_t source, bool trial) {
   if (!vibe_program_get(program)) {
     return false;
   }
-  s_play_args = (PlayArgs){program, max_ms};
+  s_play_args = (PlayArgs){program, max_ms, source, trial};
   pbl_sys_work_call(prv_play_kbg, nullptr);
   return true;
+}
+
+bool habit_service_play(VibeProgramId program, uint32_t max_ms) {
+  return habit_service_play_from(program, max_ms, AirSource_App, false);
+}
+
+static void prv_set_holdout_kbg(void *pct) {
+  prv_load_settings();
+  const uint8_t v = (uint8_t)(uintptr_t)pct;
+  s.holdout_pct = v > 100 ? 100 : v;
+  prv_settings_set(KEY_HOLDOUT, &s.holdout_pct, 1);
+}
+
+void habit_service_set_holdout(uint8_t pct) {
+  pbl_sys_work_call(prv_set_holdout_kbg, (void *)(uintptr_t)pct);
 }
 
 static void prv_stop_play_kbg(void *unused) {
@@ -1147,6 +1304,7 @@ void habit_service_calibrate(HabitRegion region) {
 
 static void prv_label_kbg(void *label) {
   prv_log(HabitLogKind_Label, (uint8_t)(uintptr_t)label, 0, 0, 0, 0);
+  prv_air(AirKind_Label, (uint8_t)(uintptr_t)label, 0, 0, 0, 0);
 }
 
 void habit_service_label(uint8_t label) {

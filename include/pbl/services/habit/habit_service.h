@@ -67,6 +67,10 @@ void habit_service_set_enabled(bool enabled);
 
 //! Play a program now (console, settings, a future app): for at most `max_ms` (0: one pass).
 bool habit_service_play(VibeProgramId program, uint32_t max_ms);
+//! The same, saying who asked (AirSource, for the log); `trial`: a share is held out (logged, not played).
+bool habit_service_play_from(VibeProgramId program, uint32_t max_ms, uint8_t source, bool trial);
+//! Percent of trial vibes (smart vibes, "vibe ... trial" commands) held out (default 25).
+void habit_service_set_holdout(uint8_t pct);
 void habit_service_stop(void);
 
 //! No habit alerts for `minutes` (0: alerts again now). Detection and logging go on.
@@ -75,6 +79,7 @@ void habit_service_set_quiet(uint32_t minutes);
 //! A command from Home Assistant (a notification titled "PDB <command>", see ancs_notifications.c):
 //! "vibe <program> [minutes]" plays a program (calm, relax, meditate, sleep, focus, energy; default 15 min),
 //! "vibe stop" stops it, "quiet on [minutes]" pauses the habit alerts (default 60 min), "quiet off" ends that.
+//! "vibe <program> <minutes> trial": an experiment vibe (a share held out), "holdout <pct>" sets that share.
 void habit_service_command(const char *cmd);
 
 //! Calibration: the hand is at `region` now; store the current forearm direction.

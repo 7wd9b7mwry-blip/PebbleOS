@@ -510,3 +510,8 @@ pbl_clar_test(test_posture
   SOURCES
     pebble/services/habit/posture.c
 )
+
+pbl_clar_test(test_air_log
+  SOURCES
+    pebble/services/habit/air_log.c
+)
