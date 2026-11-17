@@ -95,6 +95,8 @@ static struct {
   uint64_t gyro_wanted_at_ms;
   // counters
   uint32_t episodes, alerts, smart_vibes;
+  uint16_t last_rmssd;   // the last minute's HRV (beacon)
+  bool beacon_vitals;    // the beacon alternates detector / vitals pages
   bool settings_loaded;
   bool beacon;
   uint8_t beacon_minutes;
@@ -492,6 +494,33 @@ static void prv_beacon_update(void) {
   // second from the accel callback, so detection can be tuned on the watch from Home Assistant): count 0x09 x3 (state
   // bits, episodes, alerts), count 0x3D x2 (fine motion mg, gyro fine 0.1 deg/s), signed count 0x5A x3 (gravity x y z
   // mg). Objects in ascending id order; 31 bytes, so no name (HA knows it by address).
+  // every other second the vitals page instead (smart vibes can be checked on the watch): count 0x09 x4 (0x80 | asleep
+  // | off wrist << 1, heart rate, resting / sleeping baselines), count 0x3D x3 (the last minute's RMSSD ms, smart vibes
+  // played, seconds since the last heart rate reading)
+  s.beacon_vitals = !s.beacon_vitals;
+  if (s.beacon_vitals) {
+    uint8_t rest = 0, sleep = 0;
+    uint16_t base_rmssd = 0;
+    smart_vibes_baselines(&s.smart, &rest, &sleep, &base_rmssd);
+    const uint64_t age_ms = s.bpm_at_ms ? pbl_uptime_ms() - s.bpm_at_ms : 0;
+    const uint16_t age_s = (uint16_t)(age_ms / 1000 > 0xFFFF ? 0xFFFF : age_ms / 1000);
+    const uint16_t sv = (uint16_t)s.smart_vibes;
+    const uint8_t vad[] = {
+        2, 0x01, 0x06,
+        23, 0x16, 0xD2, 0xFC, 0x40, 0x01, pct,
+        0x09, (uint8_t)(0x80 | s.asleep | (s.off_wrist << 1)), 0x09, s.bpm, 0x09, rest, 0x09, sleep,
+        0x3D, (uint8_t)s.last_rmssd, (uint8_t)(s.last_rmssd >> 8), 0x3D, (uint8_t)sv, (uint8_t)(sv >> 8),
+        0x3D, (uint8_t)age_s, (uint8_t)(age_s >> 8),
+    };
+    uint8_t vbuf[sizeof(struct pbl_bt_ad_data) + sizeof(vad)];
+    struct pbl_bt_ad_data *vdata = (struct pbl_bt_ad_data *)vbuf;
+    vdata->ad_data_length = sizeof(vad);
+    vdata->scan_resp_data_length = 0;
+    memcpy(vdata->data, vad, sizeof(vad));
+    gap_le_advert_set_beacon(vdata, BEACON_INTERVAL_MS);
+    s.beacon_minutes = 0;
+    return;
+  }
   HabitVec g = {0};
   uint16_t fine = 0, gyro = 0;
   habit_detect_levels(&s.det, &g, NULL, &fine, &gyro);
@@ -700,6 +729,7 @@ static void prv_minute_kbg(void *unused) {
   const bool fresh = s.bpm && pbl_uptime_ms() - s.bpm_at_ms <
                                   (uint64_t)s.hr_interval_s * 1000 + HR_FRESH_SLACK_MS;
   const uint16_t rmssd = s.ppi_n >= 10 ? prv_isqrt(s.ppi_sq_sum / s.ppi_n) : 0;
+  s.last_rmssd = rmssd;
   const uint16_t motion = s.motion_n ? (uint16_t)(s.motion_sum / s.motion_n) : 0;
   const uint32_t lux = light_get_ambient_lux();
 

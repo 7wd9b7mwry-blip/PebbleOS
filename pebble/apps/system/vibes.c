@@ -25,17 +25,19 @@ typedef struct {
 } VibesChoice;
 
 static const VibesChoice s_choices[] = {
-    {VibeProgram_Calm, 5},  {VibeProgram_Calm, 15},  {VibeProgram_Sleep, 15},
-    {VibeProgram_Sleep, 30}, {VibeProgram_Focus, 10}, {VibeProgram_Energy, 2},
+    {VibeProgram_Calm, 5},     {VibeProgram_Calm, 15},  {VibeProgram_Relax, 10}, {VibeProgram_Meditate, 10},
+    {VibeProgram_Sleep, 15},   {VibeProgram_Sleep, 30}, {VibeProgram_Focus, 10}, {VibeProgram_Energy, 2},
     {VibeProgram_Calm, 0},
 };
 
 static const SimpleMenuItem s_items[] = {
-    {.title = "Calm", .subtitle = "5 min, slow breaths"},
+    {.title = "Calm", .subtitle = "5 min, a wave a breath"},
     {.title = "Calm", .subtitle = "15 min"},
+    {.title = "Relax", .subtitle = "10 min, slower, softer"},
+    {.title = "Meditate", .subtitle = "10 min, 5.5 breaths/min"},
     {.title = "Sleep", .subtitle = "15 min, very gentle"},
     {.title = "Sleep", .subtitle = "30 min"},
-    {.title = "Focus", .subtitle = "10 min, steady pulse"},
+    {.title = "Focus", .subtitle = "10 min, light ripples"},
     {.title = "Energy", .subtitle = "2 min, brisk"},
     {.title = "Stop", .subtitle = "End the one playing"},
 };

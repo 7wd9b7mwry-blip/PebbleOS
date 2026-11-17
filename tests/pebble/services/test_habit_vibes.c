@@ -47,13 +47,24 @@ static Played prv_play(VibeProgramId id, uint32_t max_ms, uint8_t scale, uint8_t
   return r;
 }
 
-void test_habit_vibes__calm_swells_smoothly_for_its_budget(void) {
+void test_habit_vibes__calm_waves_for_its_budget(void) {
   const Played r = prv_play(VibeProgram_Calm, 60000, 100, 0);
   cl_assert_equal_i(r.total_ms, 60000);
   cl_assert(r.rose && r.fell);
-  cl_assert(r.max_s <= 45 && r.max_s >= 40);
-  // a 4 s ramp at 50 ms resolution: many small steps, not a buzz
-  cl_assert(r.steps > 400);
+  cl_assert(r.max_s <= 70 && r.max_s >= 65);
+  // a tap train, not a hum: mostly off, and the gaps between taps narrow as a wave swells
+  cl_assert(r.on_ms < r.total_ms / 4);
+  VibePlayer p;
+  vibe_player_start(&p, vibe_program_get(VibeProgram_Calm), 11000, 100, 0, 50);
+  uint16_t ms, min_gap = 0xFFFF, max_gap = 0;
+  uint8_t s;
+  while (vibe_player_next(&p, &ms, &s)) {
+    if (s == 0 && ms < 1000) {   // a gap between taps (not the pause after a wave)
+      min_gap = ms < min_gap ? ms : min_gap;
+      max_gap = ms > max_gap ? ms : max_gap;
+    }
+  }
+  cl_assert(min_gap * 2 < max_gap);
 }
 
 void test_habit_vibes__one_shot_plays_once(void) {

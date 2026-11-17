@@ -20,7 +20,7 @@ typedef struct {
 } VibeRamp;
 
 typedef enum {
-  VibeProgram_Calm = 0,   //!< ~6 breaths a minute: 4 s swell up, 1 s hold, 5 s down
+  VibeProgram_Calm = 0,   //!< ~5.7 waves a minute: 4 s swelling (taps closer, stronger), 5 s ebbing, a pause
   VibeProgram_Sleep,      //!< very gentle, ~4 a minute: back to sleep / wind down
   VibeProgram_Focus,      //!< steady gentle pulse, 30 a minute
   VibeProgram_Energy,     //!< brisk pulses
@@ -28,6 +28,8 @@ typedef enum {
   VibeProgram_HabitPulse, //!< level 2: three firmer taps
   VibeProgram_HabitBuzz,  //!< level 3: two strong buzzes
   VibeProgram_Posture,    //!< back posture nudge: two gentle swells (unlike the habit taps)
+  VibeProgram_Relax,      //!< ~4.6 waves a minute, softer than calm
+  VibeProgram_Meditate,   //!< ~5.5 waves a minute (resonance breathing)
   VibeProgramCount,
 } VibeProgramId;
 
