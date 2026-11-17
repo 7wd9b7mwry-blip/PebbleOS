@@ -67,3 +67,4 @@ artifacts/
 .claude/settings.local.json
 .envrc
 .direnv
+include/pbl/services/habit/home_key.h

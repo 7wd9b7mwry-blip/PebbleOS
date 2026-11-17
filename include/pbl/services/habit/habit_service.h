@@ -71,6 +71,8 @@ bool habit_service_play(VibeProgramId program, uint32_t max_ms);
 bool habit_service_play_from(VibeProgramId program, uint32_t max_ms, uint8_t source, bool trial);
 //! Percent of trial vibes (smart vibes, "vibe ... trial" commands) held out (default 25).
 void habit_service_set_holdout(uint8_t pct);
+//! The key shared with the home device that advertises commands (home_cmd.h), 32 hex digits ("PDB key <hex>").
+bool habit_service_set_home_key(const char *hex32);
 void habit_service_stop(void);
 
 //! No habit alerts for `minutes` (0: alerts again now). Detection and logging go on.

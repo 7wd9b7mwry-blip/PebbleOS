@@ -515,3 +515,8 @@ pbl_clar_test(test_air_log
   SOURCES
     pebble/services/habit/air_log.c
 )
+
+pbl_clar_test(test_home_cmd
+  SOURCES
+    pebble/services/habit/home_cmd.c
+)

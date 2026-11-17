@@ -4,6 +4,15 @@
 #include <pbl/services/habit/habit_service.h>
 
 #include <pbl/services/habit/air_log.h>
+#include <pbl/services/habit/home_cmd.h>
+
+#include <mbedtls/cipher.h>
+// the key shared with the home device, for this wearer's builds only (written at build time, never committed:
+// .gitignore); without it the key is set with "PDB key <hex>"
+#if __has_include(<pbl/services/habit/home_key.h>)
+#include <pbl/services/habit/home_key.h>
+#endif
+#include <mbedtls/cmac.h>
 
 #include <string.h>
 
@@ -65,6 +74,8 @@ PBL_LOG_MODULE_DEFINE(service_habit, CONFIG_SERVICE_HABIT_LOG_LEVEL);
 #define POSTURE_BURST_MS 1200     // ... long enough for one 1 s advertisement of the tag
 #define POSTURE_PAIR_MIN_RSSI -65 // pairing: the tag must be right next to the watch
 #define WALKING_STEPS_PER_MIN 60  // a minute with this many steps teaches the upright reference
+#define HOME_SCAN_PERIOD_MS 60000   // listen for home commands (home_cmd.h) a burst a minute ...
+#define HOME_BURST_MS 600           // ... the home device advertises every 20-40 ms
 #define GYRO_BUF 64             // > 2 s at 26 Hz
 #define GYRO_OFF_AFTER_MS 10000 // hand away from the head this long: gyro off again
 
@@ -119,6 +130,13 @@ static struct {
   uint16_t grav_n;
   uint8_t near_s;
   bool sound_new;
+  // home commands (home_cmd.h)
+  uint8_t home_key[16];
+  bool home_key_set;
+  uint32_t home_last_issued;
+  uint32_t home_cmds, home_rejected;
+  bool burst_active;   // a scan burst in flight (posture or home)
+  bool home_burst;     // ... and it is a home command burst
   bool settings_loaded;
   bool beacon;
   uint8_t beacon_minutes;
@@ -180,6 +198,7 @@ static const char KEY_MODEL[] = "model";
 static const char KEY_POSTURE[] = "posture";
 static const char KEY_POSTURE_TAG[] = "posture_tag";
 static const char KEY_HOLDOUT[] = "holdout";
+static const char KEY_HOME_KEY[] = "home_key";
 
 static bool prv_settings_get(const char *key, void *val, size_t len) {
   struct pbl_settings_file file;
@@ -254,6 +273,14 @@ static void prv_load_settings(void) {
     s.posture_on = v != 0;
   }
   prv_settings_get(KEY_POSTURE_TAG, s.posture_tag, sizeof(s.posture_tag));
+  s.home_key_set = prv_settings_get(KEY_HOME_KEY, s.home_key, sizeof(s.home_key));
+#ifdef HOME_CMD_KEY
+  if (!s.home_key_set) {
+    static const uint8_t built_in[16] = HOME_CMD_KEY;
+    memcpy(s.home_key, built_in, sizeof(s.home_key));
+    s.home_key_set = true;
+  }
+#endif
   if (prv_settings_get(KEY_HOLDOUT, &v, 1) && v <= 100) {
     s.holdout_pct = v;
   }
@@ -390,6 +417,72 @@ static void prv_sound_stop(void) {}
 
 static bool prv_play(VibeProgramId program, uint32_t max_ms, AirSource source, uint8_t level);
 
+// ---- home commands (home_cmd.h) -----------------------------------------------------------------
+
+static void prv_set_quiet_kbg(void *minutes);
+static void prv_play_trial(VibeProgramId program, uint32_t max_ms, uint8_t source, bool trial);
+static void prv_stop(void);
+
+static void prv_home_cmd(const HomeCmd *c) {
+  if (!s.home_key_set || !home_cmd_is_new(c, s.home_last_issued, (uint32_t)pbl_realtime())) {
+    return;
+  }
+  uint8_t mac[16];
+  const mbedtls_cipher_info_t *aes = mbedtls_cipher_info_from_type(MBEDTLS_CIPHER_AES_128_ECB);
+  if (!aes || mbedtls_cipher_cmac(aes, s.home_key, 128, c->signed_bytes, HOME_CMD_SIGNED_LEN, mac) != 0) {
+    return;
+  }
+  uint8_t diff = 0;
+  for (int i = 0; i < HOME_CMD_TAG_LEN; i++) {
+    diff |= (uint8_t)(mac[i] ^ c->tag[i]);
+  }
+  if (diff) {
+    s.home_rejected++;
+    return;
+  }
+  s.home_last_issued = c->issued;
+  s.home_cmds++;
+  PBL_LOG_INFO("home command %u (%u, %u min)", c->op, c->program, c->minutes);
+  switch (c->op) {
+    case HomeCmdOp_Vibe: {
+      const VibeProgram *p = vibe_program_get((VibeProgramId)c->program);
+      if (p && p->loops) {
+        const uint32_t minutes = c->minutes > 120 ? 120 : c->minutes;
+        prv_play_trial((VibeProgramId)c->program, minutes * 60 * 1000, AirSource_Command, c->flags & 1);
+      }
+      break;
+    }
+    case HomeCmdOp_Stop:
+      prv_stop();
+      break;
+    case HomeCmdOp_Quiet:
+      prv_set_quiet_kbg((void *)(uintptr_t)(c->minutes > 720 ? 720 : c->minutes));
+      break;
+    case HomeCmdOp_Holdout:
+      s.holdout_pct = c->minutes > 100 ? 100 : (uint8_t)c->minutes;
+      prv_settings_set(KEY_HOLDOUT, &s.holdout_pct, 1);
+      break;
+  }
+}
+
+static void prv_scan_done(void *ctx);
+static void prv_scan_report(const uint8_t addr[6], int8_t rssi, const uint8_t *data, uint8_t len, void *ctx);
+
+static void prv_home_work(struct pbl_work *work);
+static PBL_DELAYED_WORK_DEFINE(s_home_work, prv_home_work);
+
+static void prv_home_work(struct pbl_work *work) {
+  if (!s.running) {
+    return;
+  }
+  if (s.home_key_set && !s.burst_active &&
+      pbl_bt_observer_scan(HOME_BURST_MS, prv_scan_report, prv_scan_done, nullptr) == 0) {
+    s.burst_active = true;
+    s.home_burst = true;
+  }
+  pbl_delayed_work_schedule_next(&s_home_work, pbl_ms_to_ticks(HOME_SCAN_PERIOD_MS));
+}
+
 // ---- back posture --------------------------------------------------------------------------------
 
 // filled on the Bluetooth host task during a burst, taken on KernelBG when it ends
@@ -401,6 +494,8 @@ static struct {
   int8_t best_rssi;
   uint8_t best_addr[6];
   bool best_found;
+  bool home_found;
+  HomeCmd home;   // the newest home command heard
 } s_scan;
 
 static bool prv_tag_set(void) {
@@ -410,6 +505,16 @@ static bool prv_tag_set(void) {
 
 static void prv_scan_report(const uint8_t addr[6], int8_t rssi, const uint8_t *data, uint8_t len,
                             void *ctx) {
+  HomeCmd hc;
+  if (home_cmd_parse(data, len, &hc)) {
+    pbl_mutex_lock(&s_scan_mutex, PBL_FOREVER);
+    if (!s_scan.home_found || hc.issued > s_scan.home.issued) {
+      s_scan.home = hc;
+      s_scan.home_found = true;
+    }
+    pbl_mutex_unlock(&s_scan_mutex);
+    return;
+  }
   MinewAcc m;
   if (!minew_acc_parse(data, len, &m)) {
     return;
@@ -436,6 +541,15 @@ static void prv_posture_burst_kbg(void *unused) {
   const typeof(s_scan) got = s_scan;
   memset(&s_scan, 0, sizeof(s_scan));
   pbl_mutex_unlock(&s_scan_mutex);
+  const bool home_burst = s.home_burst;
+  s.burst_active = false;
+  s.home_burst = false;
+  if (got.home_found) {
+    prv_home_cmd(&got.home);
+  }
+  if (home_burst) {
+    return;   // not a posture burst: no tag reading expected
+  }
 
   if (s.posture_pairing) {
     if (got.best_found) {
@@ -482,9 +596,14 @@ static void prv_posture_tick_kbg(void *unused) {
   if (!s.posture_pairing && !posture_scan_due(&s.scanner, (uint32_t)(pbl_uptime_ms() / 1000))) {
     return;
   }
+  if (s.burst_active) {
+    return;
+  }
   const int rc = pbl_bt_observer_scan(POSTURE_BURST_MS, prv_scan_report, prv_scan_done, nullptr);
   s.last_scan_rc = rc;
   if (rc == 0) {
+    s.burst_active = true;
+    s.home_burst = false;
     s.scans_ok++;
   } else {
     s.scans_failed++;
@@ -951,6 +1070,7 @@ static void prv_start_kbg(void *unused) {
   prv_air(AirKind_Boot, 0, 0, 0, 0, 0);
   prv_beacon_update();
   pbl_delayed_work_reschedule(&pbl_sys_workq, &s_posture_work, PBL_MSEC(POSTURE_PERIOD_MS));
+  pbl_delayed_work_reschedule(&pbl_sys_workq, &s_home_work, PBL_MSEC(HOME_SCAN_PERIOD_MS));
   PBL_LOG_INFO("started");
 }
 
@@ -963,7 +1083,9 @@ static void prv_stop_kbg(void *unused) {
   prv_save_baselines();
   prv_sound_stop();
   pbl_delayed_work_cancel(&s_posture_work);
+  pbl_delayed_work_cancel(&s_home_work);
   pbl_bt_observer_stop();
+  s.burst_active = false;
   if (s.hrm != HRM_INVALID_SESSION_REF) {
     sys_hrm_manager_unsubscribe(s.hrm);
     s.hrm = HRM_INVALID_SESSION_REF;
@@ -1069,7 +1191,7 @@ static uint32_t prv_number(const char *w, uint32_t fallback) {
 }
 
 void habit_service_command(const char *cmd) {
-  char verb[12], what[16], arg[8], flag[8];
+  char verb[12], what[40], arg[8], flag[8];
   const char *p = cmd;
   prv_word(&p, verb, sizeof(verb));
   prv_word(&p, what, sizeof(what));
@@ -1090,6 +1212,9 @@ void habit_service_command(const char *cmd) {
         return;
       }
     }
+  } else if (strcmp(verb, "key") == 0) {
+    habit_service_set_home_key(what);
+    return;
   } else if (strcmp(verb, "holdout") == 0) {
     habit_service_set_holdout((uint8_t)prv_number(what, HOLDOUT_PCT_DEFAULT));
     return;
@@ -1119,13 +1244,17 @@ typedef struct {
 
 static PlayArgs s_play_args;
 
-static void prv_play_kbg(void *unused) {
-  const PlayArgs a = s_play_args;
-  if (a.trial && pbl_rand32() % 100 < s.holdout_pct) {
-    prv_air(AirKind_Holdout, (uint8_t)a.program, a.source, 0, 0, a.max_ms);
+static void prv_play_trial(VibeProgramId program, uint32_t max_ms, uint8_t source, bool trial) {
+  if (trial && pbl_rand32() % 100 < s.holdout_pct) {
+    prv_air(AirKind_Holdout, (uint8_t)program, source, 0, 0, max_ms);
     return;
   }
-  prv_play(a.program, a.max_ms, (AirSource)a.source, 0);
+  prv_play(program, max_ms, (AirSource)source, 0);
+}
+
+static void prv_play_kbg(void *unused) {
+  const PlayArgs a = s_play_args;
+  prv_play_trial(a.program, a.max_ms, a.source, a.trial);
 }
 
 bool habit_service_play_from(VibeProgramId program, uint32_t max_ms, uint8_t source, bool trial) {
@@ -1146,6 +1275,36 @@ static void prv_set_holdout_kbg(void *pct) {
   const uint8_t v = (uint8_t)(uintptr_t)pct;
   s.holdout_pct = v > 100 ? 100 : v;
   prv_settings_set(KEY_HOLDOUT, &s.holdout_pct, 1);
+}
+
+static uint8_t s_key_arg[16];
+
+static void prv_set_home_key_kbg(void *unused) {
+  prv_load_settings();
+  memcpy(s.home_key, s_key_arg, sizeof(s.home_key));
+  s.home_key_set = true;
+  s.home_last_issued = 0;
+  prv_settings_set(KEY_HOME_KEY, s.home_key, sizeof(s.home_key));
+  PBL_LOG_INFO("home command key set");
+}
+
+static int prv_hex(char ch) {
+  return ch >= '0' && ch <= '9' ? ch - '0' : ch >= 'a' && ch <= 'f' ? ch - 'a' + 10 : ch >= 'A' && ch <= 'F' ? ch - 'A' + 10 : -1;
+}
+
+bool habit_service_set_home_key(const char *hex32) {
+  if (strlen(hex32) != 32) {
+    return false;
+  }
+  for (int i = 0; i < 16; i++) {
+    const int hi = prv_hex(hex32[2 * i]), lo = prv_hex(hex32[2 * i + 1]);
+    if (hi < 0 || lo < 0) {
+      return false;
+    }
+    s_key_arg[i] = (uint8_t)(hi << 4 | lo);
+  }
+  pbl_sys_work_call(prv_set_home_key_kbg, nullptr);
+  return true;
 }
 
 void habit_service_set_holdout(uint8_t pct) {

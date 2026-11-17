@@ -4,6 +4,7 @@
 pbl_library()
 pbl_library_sources(
   air_log.c
+  home_cmd.c
   habit_detect.c
   habit_features.c
   habit_model.c
