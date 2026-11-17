@@ -76,6 +76,10 @@ static struct {
   bool playing;
   VibeProgramId program;
   uint64_t queued_until_ms;
+  // a wave program (calm, sleep...) interrupted by an alert: it carries on after the alert
+  bool resume;
+  VibePlayer resume_player;
+  VibeProgramId resume_program;
   // per-minute aggregation
   uint32_t motion_sum;
   uint32_t motion_n;
@@ -583,6 +587,12 @@ static void prv_refill(void) {
     uint16_t ms;
     uint8_t strength;
     if (!vibe_player_next(&s.player, &ms, &strength)) {
+      if (s.resume) {   // the alert is over: back to the wave program it interrupted
+        s.resume = false;
+        s.player = s.resume_player;
+        s.program = s.resume_program;
+        continue;
+      }
       s.playing = false;  // the program is over (the queued tail finishes by itself)
       pbl_delayed_work_cancel(&s_refill_work);
       return;
@@ -591,6 +601,7 @@ static void prv_refill(void) {
       // another vibe (notification, alarm, call) took the motor: give way for good
       PBL_LOG_DBG("program %s preempted", s.player.program->name);
       s.playing = false;
+      s.resume = false;
       pbl_delayed_work_cancel(&s_refill_work);
       return;
     }
@@ -609,6 +620,14 @@ static bool prv_play(VibeProgramId program, uint32_t max_ms) {
   const VibeProgram *p = vibe_program_get(program);
   if (!p) {
     return false;
+  }
+  // an alert or nudge over a wave program: the program resumes after it (a new wave program replaces it)
+  if (!p->loops && s.playing && s.player.program && s.player.program->loops) {
+    s.resume = true;
+    s.resume_player = s.player;
+    s.resume_program = s.program;
+  } else if (p->loops) {
+    s.resume = false;
   }
   // never talk over another vibe; replace our own
   if (vibe_pattern_is_owned_by(VibePatternOwner_Habit)) {
@@ -629,6 +648,7 @@ static bool prv_play(VibeProgramId program, uint32_t max_ms) {
 
 static void prv_stop(void) {
   s.playing = false;
+  s.resume = false;
   pbl_delayed_work_cancel(&s_refill_work);
   vibe_pattern_clear_for_owner(VibePatternOwner_Habit);
 }
