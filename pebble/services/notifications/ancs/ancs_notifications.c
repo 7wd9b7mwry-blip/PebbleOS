@@ -322,7 +322,7 @@ static bool prv_handle_habit_command(const ANCSAttribute *app_id, const ANCSAttr
     char cmd[64];
     const size_t n = title->length - plen;
     memcpy(cmd, title->value + plen, n);
-    cmd[n] = ' ';
+    cmd[n] = '\0';
     habit_service_command(cmd);
   }
   return true;

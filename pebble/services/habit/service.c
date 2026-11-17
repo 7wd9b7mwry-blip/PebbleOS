@@ -925,7 +925,7 @@ static void prv_word(const char **p, char *out, size_t n) {
     }
     (*p)++;
   }
-  out[i] = ' ';
+  out[i] = '\0';
 }
 
 static uint32_t prv_number(const char *w, uint32_t fallback) {
