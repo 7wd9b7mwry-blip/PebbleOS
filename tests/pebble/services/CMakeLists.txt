@@ -480,3 +480,33 @@ pbl_clar_test(test_mic_capture
   DEFINES CONFIG_SERVICE_MIC_CAPTURE
   OVERRIDES dummy_board
 )
+
+pbl_clar_test(test_habit_detect
+  SOURCES
+    pebble/services/habit/habit_detect.c
+    pebble/services/habit/habit_features.c
+    pebble/services/habit/habit_model.c
+)
+
+pbl_clar_test(test_habit_vibes
+  SOURCES
+    pebble/services/habit/vibe_program.c
+    pebble/services/habit/habit_policy.c
+)
+
+pbl_clar_test(test_sound_level
+  SOURCES
+    pebble/services/habit/sound_level.c
+)
+
+pbl_clar_test(test_habit_features
+  SOURCES
+    pebble/services/habit/habit_detect.c
+    pebble/services/habit/habit_features.c
+    pebble/services/habit/habit_model.c
+)
+
+pbl_clar_test(test_posture
+  SOURCES
+    pebble/services/habit/posture.c
+)

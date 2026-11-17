@@ -1,0 +1,18 @@
+# SPDX-FileCopyrightText: 2026 7wd9b7mwry-blip
+# SPDX-License-Identifier: Apache-2.0
+
+config SERVICE_HABIT
+    bool "Habit detection and smart vibes"
+    depends on SERVICE_ACTIVITY && SERVICE_VIBE_PATTERN
+    help
+      Always-on detection of hand-to-head habits (nail biting, skin, hair and nose picking) with
+      escalating vibration alerts, smart vibes from heart rate / HRV / sleep, and data logging
+      of episodes and a per-minute summary.
+
+if SERVICE_HABIT
+
+module = SERVICE_HABIT
+module-str = Habit
+source "subsys/logging/Kconfig.template.log_level"
+
+endif

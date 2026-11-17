@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <stdbool.h>
 #include <stdint.h>
 #include <time.h>
 
@@ -40,6 +41,8 @@ typedef enum VibePatternOwner {
   VibePatternOwner_Alarm,
   /** Vibes started by the worker task; cleared on worker cleanup. */
   VibePatternOwner_Worker,
+  /** Habit service programs (streamed); any other pattern takes over from them. */
+  VibePatternOwner_Habit,
 } VibePatternOwner;
 
 /** @brief Initialize the service. */
@@ -104,5 +107,26 @@ void vibe_pattern_set_owner(VibePatternOwner owner);
  * @param owner Owner whose pattern to stop.
  */
 void vibe_pattern_clear_for_owner(VibePatternOwner owner);
+
+/**
+ * @brief Stream a step of a long pattern owned by @p owner.
+ *
+ * Starts a new pattern with the step if nothing is playing or queued, or appends it to the
+ * playing pattern if @p owner started it, so arbitrarily long programs play without gaps.
+ *
+ * @param owner Owner of the streamed pattern.
+ * @param duration_ms Step duration (at most 10 s).
+ * @param strength Step strength, -100 to 100.
+ * @return false if another owner's pattern is playing or queued, or the queue is full.
+ */
+bool vibe_pattern_stream_step(VibePatternOwner owner, uint32_t duration_ms, int32_t strength);
+
+/**
+ * @brief Check whether a pattern owned by @p owner is playing or queued.
+ *
+ * @param owner Owner to check.
+ * @return true if @p owner's pattern is live.
+ */
+bool vibe_pattern_is_owned_by(VibePatternOwner owner);
 
 /** @} */

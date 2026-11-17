@@ -14,6 +14,7 @@
 static bool s_is_advertising_enabled;
 static uint32_t s_min_advertising_interval_ms;
 static uint32_t s_max_advertising_interval_ms;
+static bool s_is_beacon;
 
 static Advertising_Data_t s_ad_data;
 static unsigned int s_ad_data_length;
@@ -25,6 +26,7 @@ void fake_bt_advert_init(void) {
   s_is_advertising_enabled = false;
   s_min_advertising_interval_ms = 0;
   s_max_advertising_interval_ms = 0;
+  s_is_beacon = false;
   memset(&s_ad_data, 0, sizeof(s_ad_data));
   s_ad_data_length = 0;
   memset(&s_scan_resp_data, 0, sizeof(s_scan_resp_data));
@@ -41,8 +43,21 @@ void gap_le_set_advertising_disabled(void) {
 
 // -- pbl_bt_advert contract -------------------------------------------------
 
+bool pbl_bt_advert_beacon_enable(uint32_t interval_ms) {
+  s_is_advertising_enabled = true;
+  s_is_beacon = true;
+  s_min_advertising_interval_ms = interval_ms;
+  s_max_advertising_interval_ms = interval_ms;
+  return true;
+}
+
+bool gap_le_is_beacon_advertising(void) {
+  return s_is_advertising_enabled && s_is_beacon;
+}
+
 bool pbl_bt_advert_advertising_enable(uint32_t min_interval_ms, uint32_t max_interval_ms) {
   s_is_advertising_enabled = true;
+  s_is_beacon = false;
   s_min_advertising_interval_ms = min_interval_ms;
   s_max_advertising_interval_ms = max_interval_ms;
   return true;

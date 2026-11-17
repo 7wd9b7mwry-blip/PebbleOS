@@ -28,6 +28,7 @@ void gap_le_set_advertising_disabled(void);
 
 //! True iff the simulated controller currently has advertising enabled.
 bool gap_le_is_advertising_enabled(void);
+bool gap_le_is_beacon_advertising(void);
 
 //! Asserts the advertising interval last programmed into the controller matches
 //! the ms value for the given GAPLEAdvertisingInterval preset.
