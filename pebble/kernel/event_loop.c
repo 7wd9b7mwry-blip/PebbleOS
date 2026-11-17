@@ -30,6 +30,9 @@
 #include <pbl/services/firmware_update.h>
 #include <pbl/services/language_pack.h>
 #include <pbl/services/light.h>
+#ifdef CONFIG_SERVICE_HABIT
+#include <pbl/services/habit/habit_service.h>
+#endif
 #include <pbl/services/music_internal.h>
 #include <pbl/services/put_bytes/put_bytes.h>
 #include <pbl/task_wdt/task_wdt.h>
@@ -173,9 +176,27 @@ static void back_button_force_quit_handler(struct pbl_work *work) {
   launcher_task_add_callback(launcher_force_quit_app, nullptr);
 }
 
+static uint8_t s_habit_swallow_up;   // buttons whose press the habit service took: their release goes too
+
 static void launcher_handle_button_event(PebbleEvent *e) {
   ButtonId button_id = e->button.button_id;
   const bool watchface_running = app_manager_is_watchface_running();
+
+#ifdef CONFIG_SERVICE_HABIT
+  // right after a habit buzz, a press marks it a false alarm (the app doesn't see it)
+  if (e->type == PEBBLE_BUTTON_DOWN_EVENT && habit_service_button_claim()) {
+    s_habit_swallow_up |= (uint8_t)(1 << button_id);
+    e->task_mask |= 1 << PebbleTask_App;
+    light_button_pressed();
+    return;
+  }
+  if (e->type == PEBBLE_BUTTON_UP_EVENT && (s_habit_swallow_up & (1 << button_id))) {
+    s_habit_swallow_up &= (uint8_t)~(1 << button_id);
+    e->task_mask |= 1 << PebbleTask_App;
+    light_button_released();
+    return;
+  }
+#endif
 
   // trigger the backlight on any button down event
   if (e->type == PEBBLE_BUTTON_DOWN_EVENT) {

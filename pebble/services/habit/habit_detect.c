@@ -4,6 +4,7 @@
 #include <pbl/services/habit/habit_detect.h>
 #include <pbl/services/habit/habit_features.h>
 #include <pbl/services/habit/habit_model.h>
+#include <pbl/services/habit/habit_negatives.h>
 
 #include <stddef.h>
 #include <stdlib.h>
@@ -173,10 +174,17 @@ static void prv_window_score(HabitDetector *d) {
 
 //! Whether the classifier lets an episode start (always, without a trained model)
 static bool prv_model_allows(const HabitDetector *d) {
+  // a region with marked false alarms waits for a scored window, and one like a false alarm doesn't start
+  if (d->neg && habit_negatives_bias(d->neg, d->region) > 0) {
+    if (!d->scored || habit_negatives_match(d->neg, d->region, d->features)) {
+      return false;
+    }
+  }
   if (!d->cfg.use_model || !habit_model_trained()) {
     return true;
   }
-  return d->scored && d->model_ok;
+  const int32_t bias = d->neg ? habit_negatives_bias(d->neg, d->region) : 0;
+  return d->scored && d->model_score >= d->cfg.model_threshold + bias;
 }
 
 bool habit_detect_take_window(HabitDetector *d, int32_t features[16], int32_t *score) {

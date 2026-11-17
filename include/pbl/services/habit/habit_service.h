@@ -89,6 +89,11 @@ void habit_service_calibrate(HabitRegion region);
 
 //! The wearer labels the last few seconds (1: "that was a habit", 2: "false alarm").
 void habit_service_label(uint8_t label);
+//! A button went down: true (and the press is the service's) when it marks the habit buzz of the last 15 s a
+//! false alarm. Called by the kernel's button handling before the app sees the press.
+bool habit_service_button_claim(void);
+//! Forget the marked false alarms ("habit fa forget").
+void habit_service_forget_false_alarms(void);
 
 //! Settings, persisted in flash (with the calibration and the learned baselines).
 void habit_service_set_vibrate(bool vibrate);

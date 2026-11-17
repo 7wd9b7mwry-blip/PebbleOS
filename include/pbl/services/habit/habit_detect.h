@@ -77,9 +77,12 @@ typedef enum {
 //! HABIT_FEAT_HZ)
 #define HABIT_DETECT_WINDOW 30
 
+struct HabitNegatives;
+
 typedef struct {
   HabitConfig cfg;
   bool primed;
+  const struct HabitNegatives *neg;   //!< the wearer's marked false alarms (habit_negatives.h), or NULL
   // classifier window (ring) and its latest result
   HabitVec win_acc[HABIT_DETECT_WINDOW];
   HabitVec win_gyro[HABIT_DETECT_WINDOW];

@@ -486,6 +486,7 @@ pbl_clar_test(test_habit_detect
     pebble/services/habit/habit_detect.c
     pebble/services/habit/habit_features.c
     pebble/services/habit/habit_model.c
+    pebble/services/habit/habit_negatives.c
 )
 
 pbl_clar_test(test_habit_vibes
@@ -504,6 +505,7 @@ pbl_clar_test(test_habit_features
     pebble/services/habit/habit_detect.c
     pebble/services/habit/habit_features.c
     pebble/services/habit/habit_model.c
+    pebble/services/habit/habit_negatives.c
 )
 
 pbl_clar_test(test_posture
@@ -519,4 +521,9 @@ pbl_clar_test(test_air_log
 pbl_clar_test(test_home_cmd
   SOURCES
     pebble/services/habit/home_cmd.c
+)
+
+pbl_clar_test(test_habit_negatives
+  SOURCES
+    pebble/services/habit/habit_negatives.c
 )

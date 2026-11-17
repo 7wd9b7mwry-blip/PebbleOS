@@ -8,6 +8,7 @@ pbl_library_sources(
   habit_detect.c
   habit_features.c
   habit_model.c
+  habit_negatives.c
   habit_policy.c
   posture.c
   sound_level.c

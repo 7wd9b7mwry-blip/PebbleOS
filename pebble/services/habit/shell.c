@@ -200,7 +200,13 @@ static int prv_cmd_uncal(const struct pbl_shell *sh, size_t argc, char **argv) {
   return 0;
 }
 
+static int prv_cmd_faforget(const struct pbl_shell *sh, size_t argc, char **argv) {
+  habit_service_forget_false_alarms();
+  return 0;
+}
+
 static const struct pbl_shell_cmd sub_habit[] = {
+  PBL_SHELL_CMD(faforget, nullptr, "Forget the false alarms marked by a button press", prv_cmd_faforget),
   PBL_SHELL_CMD(status, nullptr, "Detector, counters and baselines", prv_cmd_status),
   PBL_SHELL_CMD_ARG(play, nullptr, "Play <program> [seconds]", prv_cmd_play, 2, 1),
   PBL_SHELL_CMD(stop, nullptr, "Stop the program", prv_cmd_stop),

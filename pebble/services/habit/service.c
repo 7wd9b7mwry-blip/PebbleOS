@@ -5,6 +5,7 @@
 
 #include <pbl/services/habit/air_log.h>
 #include <pbl/services/habit/home_cmd.h>
+#include <pbl/services/habit/habit_negatives.h>
 
 #include <mbedtls/cipher.h>
 // the key shared with the home device, for this wearer's builds only (written at build time, never committed:
@@ -74,6 +75,7 @@ PBL_LOG_MODULE_DEFINE(service_habit, CONFIG_SERVICE_HABIT_LOG_LEVEL);
 #define POSTURE_BURST_MS 1200     // ... long enough for one 1 s advertisement of the tag
 #define POSTURE_PAIR_MIN_RSSI -65 // pairing: the tag must be right next to the watch
 #define WALKING_STEPS_PER_MIN 60  // a minute with this many steps teaches the upright reference
+#define FALSE_ALARM_WINDOW_MS 15000   // a button press this soon after a habit buzz marks it a false alarm
 #define HOME_SCAN_PERIOD_MS 60000   // listen for home commands (home_cmd.h) a burst a minute ...
 #define HOME_BURST_MS 600           // ... the home device advertises every 20-40 ms
 #define GYRO_BUF 64             // > 2 s at 26 Hz
@@ -130,6 +132,13 @@ static struct {
   uint16_t grav_n;
   uint8_t near_s;
   bool sound_new;
+  // false alarms (habit_negatives.h): the last alert, which a button press can mark
+  HabitNegatives neg;
+  uint32_t alert_at_ms;
+  uint8_t alert_region;
+  int32_t alert_feat[16];
+  volatile bool alert_claimable;
+  uint32_t false_alarms;
   // home commands (home_cmd.h)
   uint8_t home_key[16];
   bool home_key_set;
@@ -199,6 +208,7 @@ static const char KEY_POSTURE[] = "posture";
 static const char KEY_POSTURE_TAG[] = "posture_tag";
 static const char KEY_HOLDOUT[] = "holdout";
 static const char KEY_HOME_KEY[] = "home_key";
+static const char KEY_NEG[] = "neg";
 
 static bool prv_settings_get(const char *key, void *val, size_t len) {
   struct pbl_settings_file file;
@@ -274,6 +284,9 @@ static void prv_load_settings(void) {
   }
   prv_settings_get(KEY_POSTURE_TAG, s.posture_tag, sizeof(s.posture_tag));
   s.home_key_set = prv_settings_get(KEY_HOME_KEY, s.home_key, sizeof(s.home_key));
+  if (!prv_settings_get(KEY_NEG, &s.neg, sizeof(s.neg)) || s.neg.version != HABIT_NEG_VERSION) {
+    habit_negatives_init(&s.neg);
+  }
 #ifdef HOME_CMD_KEY
   if (!s.home_key_set) {
     static const uint8_t built_in[16] = HOME_CMD_KEY;
@@ -874,6 +887,10 @@ static void prv_accel_cb(AccelData *data, uint32_t num_samples) {
       s.alerts++;
       prv_log(HabitLogKind_Alert, req.program, s.resp.level, 0, 0, 0);
       prv_play(req.program, req.max_ms, AirSource_Alert, s.resp.level);
+      s.alert_at_ms = (uint32_t)pbl_uptime_ms();
+      s.alert_region = (uint8_t)ep.region;
+      memcpy(s.alert_feat, s.det.features, sizeof(s.alert_feat));
+      s.alert_claimable = true;
     }
   }
   uint16_t fine;
@@ -1133,6 +1150,7 @@ void habit_service_init(void) {
   // the region and the fine motion until it is retrained on the wearer's labelled windows ("habit model on").
   dcfg.use_model = false;
   habit_detect_init(&s.det, &dcfg);
+  s.det.neg = &s.neg;
   HabitResponseConfig rcfg;
   habit_response_default_config(&rcfg);
   habit_response_init(&s.resp, &rcfg);
@@ -1464,6 +1482,39 @@ void habit_service_calibrate(HabitRegion region) {
 static void prv_label_kbg(void *label) {
   prv_log(HabitLogKind_Label, (uint8_t)(uintptr_t)label, 0, 0, 0, 0);
   prv_air(AirKind_Label, (uint8_t)(uintptr_t)label, 0, 0, 0, 0);
+}
+
+// a button press right after a habit buzz: a false alarm. The buzz stops, the window is remembered (no episode from
+// one like it again in that region) and the label goes to the air log (kind label, a 2, b the region)
+static void prv_false_alarm_kbg(void *unused) {
+  if (s.playing) {
+    prv_stop();
+  }
+  habit_negatives_add(&s.neg, (HabitRegion)s.alert_region, s.alert_feat);
+  prv_settings_set(KEY_NEG, &s.neg, sizeof(s.neg));
+  s.false_alarms++;
+  prv_log(HabitLogKind_Label, 2, s.alert_region, 0, 0, 0);
+  prv_air(AirKind_Label, 2, s.alert_region, 0, 0, 0);
+  vibe_pattern_stream_step(VibePatternOwner_Habit, 60, 40);   // a faint tick: got it
+  PBL_LOG_INFO("false alarm marked (region %u, %u kept)", s.alert_region, s.neg.n);
+}
+
+bool habit_service_button_claim(void) {
+  if (!s.running || !s.alert_claimable || (uint32_t)pbl_uptime_ms() - s.alert_at_ms > FALSE_ALARM_WINDOW_MS) {
+    return false;
+  }
+  s.alert_claimable = false;
+  pbl_sys_work_call(prv_false_alarm_kbg, nullptr);
+  return true;
+}
+
+static void prv_forget_false_alarms_kbg(void *unused) {
+  habit_negatives_init(&s.neg);
+  prv_settings_set(KEY_NEG, &s.neg, sizeof(s.neg));
+}
+
+void habit_service_forget_false_alarms(void) {
+  pbl_sys_work_call(prv_forget_false_alarms_kbg, nullptr);
 }
 
 void habit_service_label(uint8_t label) {
