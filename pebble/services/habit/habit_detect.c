@@ -96,6 +96,9 @@ static bool prv_motion_ok(const HabitDetector *d, bool need_fine) {
   if (!need_fine) {
     return true;
   }
+  if (d->cfg.gyro_required && d->cfg.min_fine_gyro_dps10 > 0) {   // no gyro data yet: wait for it
+    return d->have_gyro && d->gyro_fine / FX >= d->cfg.min_fine_gyro_dps10;
+  }
   if (d->fine / FX >= d->cfg.min_fine_mg) {
     return true;
   }

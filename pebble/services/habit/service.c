@@ -811,11 +811,17 @@ void habit_service_init(void) {
   HabitConfig dcfg;
   habit_detect_default_config(&dcfg);
   dcfg.sample_hz = SAMPLE_HZ;
-  // Measured on the wearer's watch (left wrist, biting / picking, 2026-11-16): the hand at the mouth reads gravity
-  // about (-0.65, +0.75, -0.15), not the generic -x; the hand resting reads (0.06, 0.96, -0.26), 44 deg away. Until
-  // the regions are calibrated on the watch, the face region is that direction with a 32 deg cone.
-  dcfg.regions[HabitRegion_Face] = (HabitRegionProto){
+  // Measured on the wearer's watch (left wrist, 2026-11-16), until the regions are calibrated on the watch: biting
+  // reads gravity about (-0.65, +0.75, -0.15) and picking with the hand facing forward (-0.62, +0.21, +0.76); the
+  // hand resting (0.06, 0.96, -0.26) and holding the phone (-0.9, 0.4, -0.2) / (-0.22, 0.9, -0.37) differ in motion
+  // rather than angle from biting: the phone shakes (fine accel 15-120 mg) but barely turns (gyro under 14 deg/s),
+  // biting and picking turn the wrist 15-200 deg/s. So: 32 deg cones, and the fine motion must be rotation (30 deg/s).
+  dcfg.regions[HabitRegion_Mouth] = (HabitRegionProto){
       .enabled = true, .gravity = {.x = -645, .y = 751, .z = -149}, .cos_min_x1000 = 848};
+  dcfg.regions[HabitRegion_Face] = (HabitRegionProto){
+      .enabled = true, .gravity = {.x = -616, .y = 212, .z = 759}, .cos_min_x1000 = 848};
+  dcfg.gyro_required = true;
+  dcfg.min_fine_gyro_dps10 = 300;
   // The classifier (trained on other people's wrist data) rejected every window on this watch: episodes come from
   // the region and the fine motion until it is retrained on the wearer's labelled windows ("habit model on").
   dcfg.use_model = false;
