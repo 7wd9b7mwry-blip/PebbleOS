@@ -481,12 +481,26 @@ static void prv_beacon_update(void) {
     return;
   }
   const uint8_t pct = battery_get_charge_state().charge_percent;
-  // flags; BTHome v2 service data (UUID 0xFCD2, unencrypted, object 0x01 battery %); name
+  // flags; BTHome v2 service data (UUID 0xFCD2, unencrypted): battery %, then the detector's live state (refreshed every
+  // second from the accel callback, so detection can be tuned on the watch from Home Assistant): count 0x09 x3 (state
+  // bits, episodes, alerts), count 0x3D x2 (fine motion mg, gyro fine 0.1 deg/s), signed count 0x5A x3 (gravity x y z
+  // mg). Objects in ascending id order; 31 bytes, so no name (HA knows it by address).
+  HabitVec g = {0};
+  uint16_t fine = 0, gyro = 0;
+  habit_detect_levels(&s.det, &g, NULL, &fine, &gyro);
+  const uint8_t bits = (uint8_t)((uint8_t)s.det.state |
+                                 ((habit_detect_current_region(&s.det) != HabitRegion_None) << 2) |
+                                 (s.det.have_gyro << 3) | (s.det.model_ok << 4) | (s.gyro_on << 5) |
+                                 (s.det.scored << 6));
   const uint8_t ad[] = {
       2, 0x01, 0x06,
-      6, 0x16, 0xD2, 0xFC, 0x40, 0x01, pct,
-      4, 0x09, 'P', 'T', '2',
+      27, 0x16, 0xD2, 0xFC, 0x40, 0x01, pct,
+      0x09, bits, 0x09, (uint8_t)s.episodes, 0x09, (uint8_t)s.alerts,
+      0x3D, (uint8_t)fine, (uint8_t)(fine >> 8), 0x3D, (uint8_t)gyro, (uint8_t)(gyro >> 8),
+      0x5A, (uint8_t)g.x, (uint8_t)((uint16_t)g.x >> 8), 0x5A, (uint8_t)g.y, (uint8_t)((uint16_t)g.y >> 8),
+      0x5A, (uint8_t)g.z, (uint8_t)((uint16_t)g.z >> 8),
   };
+  _Static_assert(sizeof(ad) <= 31, "legacy advertising data is at most 31 bytes");
   uint8_t buf[sizeof(struct pbl_bt_ad_data) + sizeof(ad)];
   struct pbl_bt_ad_data *data = (struct pbl_bt_ad_data *)buf;
   data->ad_data_length = sizeof(ad);
@@ -617,6 +631,7 @@ static void prv_accel_cb(AccelData *data, uint32_t num_samples) {
   s.motion_n++;
   prv_log_window();
   prv_gyro_update();
+  prv_beacon_update();   // the live detector state (about once a second)
 }
 
 static void prv_hrm_cb(PebbleHRMEvent *e, void *context) {
