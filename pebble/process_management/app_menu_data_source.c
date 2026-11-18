@@ -16,6 +16,7 @@
 #include <applib/app_malloc.h>
 #include <applib/ui/menu_layer.h>
 #include <apps/system_app_ids.h>
+#include <process_management/app_install_manager.h>
 #include <process_management/app_manager.h>
 #include <resource/resource_ids.auto.h>
 #include <syscall/syscall.h>
@@ -46,6 +47,13 @@ static const struct {
   AppInstallId install_id;
   bool move_on_activity;
 } s_override_table[] = {
+  // ours first (the Food watchapp, by its UUID, goes before them: see prv_override_index)
+#ifdef APP_ID_VIBES
+  {APP_ID_VIBES, false},
+#endif
+#ifdef APP_ID_HABITS
+  {APP_ID_HABITS, false},
+#endif
   {APP_ID_SPORTS, false},
   {APP_ID_GOLF, false},
 #ifdef APP_ID_WORKOUT
@@ -56,8 +64,17 @@ static const struct {
 
 // Returns 0 if not in table. Otherwise, returns the rank in `s_override_table`. Rank is
 // where the lowest index returns the highest rank
+//! The Food watchapp (tools/pebble_food), first in the launcher; its install id is given on install, so it is
+//! looked up by UUID when the list is built (app_menu_data_source_init).
+static const Uuid s_food_uuid = {0x3f, 0x1c, 0x2a, 0x8e, 0x6b, 0x4d, 0x4e, 0x2a,
+                                 0x9c, 0x7f, 0x1d, 0x5e, 0x8b, 0x0a, 0x2c, 0x41};
+static AppInstallId s_food_id = INSTALL_ID_INVALID;
+
 static int prv_override_index(AppInstallId app_id) {
   const uint32_t num_overrides = ARRAY_LENGTH(s_override_table);
+  if (s_food_id != INSTALL_ID_INVALID && app_id == s_food_id) {
+    return num_overrides + 2;
+  }
   for (uint32_t i = 0; i < num_overrides; i++) {
     AppInstallId cur_id = s_override_table[i].install_id;
     if (cur_id == app_id) {
@@ -442,6 +459,7 @@ void app_menu_data_source_init(AppMenuDataSource *source,
   *source = (AppMenuDataSource){
     .callback_context = callback_context,
   };
+  s_food_id = app_install_get_id_for_uuid(&s_food_uuid);
   if (callbacks) {
     source->callbacks = *callbacks;
   }
