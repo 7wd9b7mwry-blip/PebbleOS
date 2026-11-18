@@ -90,14 +90,14 @@ void test_posture__sustained_slouch_alerts_and_repeats(void) {
   cl_assert(s_d.calibrated);
   cl_assert_equal_i(prv_run(5, 300, 10, false), 0);  // sitting upright (5 deg): fine
   cl_assert_equal_i(s_d.state, PostureState_Upright);
-  // slouched 25 deg: the first alert after 20 s, then every minute
-  cl_assert_equal_i(prv_run(25, 10, 10, false), 0);
-  cl_assert_equal_i(prv_run(25, 20, 10, false), 1);
-  cl_assert_equal_i(prv_run(25, 50, 10, false), 0);
-  cl_assert_equal_i(prv_run(25, 20, 10, false), 1);
+  // slouched 25 deg (a reading every 3 s): the first alert after 6 s, then every minute
+  cl_assert_equal_i(prv_run(25, 6, 3, false), 0);
+  cl_assert_equal_i(prv_run(25, 3, 3, false), 1);
+  cl_assert_equal_i(prv_run(25, 54, 3, false), 0);
+  cl_assert_equal_i(prv_run(25, 9, 3, false), 1);
   // sitting up resets it
-  cl_assert_equal_i(prv_run(3, 30, 10, false), 0);
-  cl_assert_equal_i(prv_run(25, 10, 10, false), 0);
+  cl_assert_equal_i(prv_run(3, 30, 3, false), 0);
+  cl_assert_equal_i(prv_run(25, 3, 3, false), 0);
 }
 
 void test_posture__reclining_is_not_slouching(void) {
@@ -108,14 +108,14 @@ void test_posture__reclining_is_not_slouching(void) {
 
 void test_posture__brief_leans_and_gaps(void) {
   prv_run(0, 120, 10, true);
-  for (int i = 0; i < 10; i++) {  // leaning in for 10 s, then back: never an alert
-    cl_assert_equal_i(prv_run(25, 10, 10, false), 0);
+  for (int i = 0; i < 10; i++) {  // leaning in for 3 s, then back: never an alert
+    cl_assert_equal_i(prv_run(25, 3, 3, false), 0);
     cl_assert_equal_i(prv_run(2, 20, 10, false), 0);
   }
   // readings missing for 2 min in the middle of a slouch: the timer starts over
-  cl_assert_equal_i(prv_run(25, 10, 10, false), 0);
+  cl_assert_equal_i(prv_run(25, 3, 3, false), 0);
   s_t += 120;
-  cl_assert_equal_i(prv_run(25, 10, 10, false), 0);
+  cl_assert_equal_i(prv_run(25, 3, 3, false), 0);
 }
 
 void test_posture__minute_summary_and_forget(void) {

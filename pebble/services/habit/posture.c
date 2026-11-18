@@ -46,7 +46,7 @@ void posture_default_config(PostureConfig *cfg) {
   *cfg = (PostureConfig){
       .slouch_cos_x1000 = 966,   // 15 degrees
       .recline_cos_x1000 = 500,  // 60 degrees
-      .slouch_s = 20,   // a nudge you can tie to the position (2026-11-18: 60 s, then every 5 min, felt random)
+      .slouch_s = 6,    // a nudge you can tie to the position (2026-11-18: 60 s, then every 5 min, felt random)
       .repeat_s = 60,   // then every minute while it lasts, like the habit alerts
       .gap_s = 90,  // > the once-a-minute rate of a parked tag, so a slow slouch still counts
       .ref_n = 12,

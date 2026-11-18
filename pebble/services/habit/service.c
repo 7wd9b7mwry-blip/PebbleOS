@@ -73,8 +73,8 @@ PBL_LOG_MODULE_DEFINE(service_habit, CONFIG_SERVICE_HABIT_LOG_LEVEL);
 #define SOUND_FRAME_SAMPLES 320   // 20 ms at 16 kHz
 #define SOUND_FRAMES 50           // one second a minute
 #define SOUND_SKIP_FRAMES 10      // the first 200 ms after the mic starts: its start-up, not the room
-#define POSTURE_PERIOD_MS 10000   // the scan timer; bursts every 10 s while the tag is worn ...
-#define POSTURE_BURST_MS 1200     // ... long enough for one 1 s advertisement of the tag
+#define POSTURE_PERIOD_MS 3000    // the scan timer; bursts every 3 s while the tag is worn (a nudge within ~6-9 s) ...
+#define POSTURE_BURST_MS 600      // ... long enough for one of the E8's advertisements (every 0.5 s)
 #define POSTURE_PAIR_MIN_RSSI -65 // pairing: the tag must be right next to the watch
 #define POSTURE_UPRIGHT_MAX_AGE_S 90  // "upright now" needs a tag reading this recent
 #define WALKING_STEPS_PER_MIN 60  // a minute with this many steps teaches the upright reference
