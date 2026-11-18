@@ -41,6 +41,9 @@ typedef enum {
   VibeProgram_LabSleepEdges,
   VibeProgram_LabBreath,     //!< in: taps closing in; out: a soft hum fading (two textures)
   VibeProgram_LabHeart,      //!< a heartbeat slower than mine (Doppel): see vibe_program_set_heart_bpm
+  VibeProgram_LabCalmSmooth,     //!< one continuous swell and ebb (eased), never stopping between waves
+  VibeProgram_LabCalmSmoothGap,  //!< the same with a moment of silence between waves
+  VibeProgram_LabSleepSmooth,    //!< sleep's breathing as a soft continuous swell
   VibeProgramCount,
 } VibeProgramId;
 

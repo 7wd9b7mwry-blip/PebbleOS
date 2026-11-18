@@ -55,6 +55,7 @@ PBL_LOG_MODULE_DEFINE(service_habit, CONFIG_SERVICE_HABIT_LOG_LEVEL);
 #define QUEUE_AHEAD_MS 2000    // keep this much of a program queued on the motor
 #define REFILL_MS 500
 #define STEP_MS 50
+#define LAB_STEP_MS 25         // the lab's ramps in finer steps (the smooth waves)
 #define FLOOR_PCT 12           // weakest strength the LRA is felt at (to tune on the watch)
 #define HR_FRESH_SLACK_MS (2 * 60 * 1000)  // a reading stays current this long past its interval
 #define MIN_HR_CONFIDENCE 50
@@ -872,7 +873,7 @@ static bool prv_play(VibeProgramId program, uint32_t max_ms, AirSource source, u
     vibe_program_set_heart_bpm((uint8_t)(s.bpm ? s.bpm * 4 / 5 : 60));
   }
   vibe_player_start(&s.player, p, max_ms, (uint8_t)(scale > 100 ? 100 : (scale < 0 ? 0 : scale)),
-                    FLOOR_PCT, STEP_MS);
+                    FLOOR_PCT, program >= VibeProgram_LabFirst ? LAB_STEP_MS : STEP_MS);
   s.program = program;
   s.playing = true;
   s.queued_until_ms = 0;

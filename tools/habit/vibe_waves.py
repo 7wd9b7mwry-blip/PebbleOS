@@ -74,6 +74,17 @@ def breath(inhale=4000, exhale=6000, pause=1000):
     return wave(inhale, 1, 0, 600, 200, 30, 70, 45)[:-1] + [(exhale, 30, 8), (pause, 0, 0)]
 
 
+def smooth(rise, fall, rest, lo, hi, rest_level, pieces=12):
+    """one continuous vibration swelling and ebbing like a breath (eased: a raised cosine, in `pieces` ramps a side),
+    then `rest` ms at `rest_level` (0: a moment of silence; above 0 it never stops)"""
+    import math
+    out = []
+    for dur, a, b in ((rise, lo, hi), (fall, hi, lo)):
+        pts = [a + (b - a) * (1 - math.cos(math.pi * i / pieces)) / 2 for i in range(pieces + 1)]
+        out += [(dur // pieces, int(round(pts[i])), int(round(pts[i + 1]))) for i in range(pieces)]
+    return out + [(rest, rest_level, rest_level)]
+
+
 LAB = {
     "lab_calm_full": wave(*P["calm"]),
     "lab_calm_floor": wave_floor(*P["calm"]),
@@ -83,6 +94,10 @@ LAB = {
     "lab_sleep_floor": wave_floor(*P["sleep"]),
     "lab_sleep_edges": wave_edges(*P["sleep"]),
     "lab_breath": breath(),
+    # the smooth waves over the full range (the 2026-11-16 swell was inside a 25-49 % range: a steady hum)
+    "lab_calm_smooth": smooth(4000, 5000, 1500, 6, 85, 6),        # never stops: the floor between waves
+    "lab_calm_smooth_gap": smooth(4000, 5000, 1500, 6, 85, 0),    # a moment of silence between waves
+    "lab_sleep_smooth": smooth(6000, 7000, 3000, 4, 45, 4),
 }
 
 for name, w in list(P.items()) + [(k, None) for k in LAB]:

@@ -53,6 +53,15 @@ static const VibeRamp s_lab_sleep_edges[] = {  // 93 ramps, 16506 ms a wave
 static const VibeRamp s_lab_breath[] = {  // 26 ramps, 11315 ms a wave
     {45, 30, 30}, {555, 0, 0}, {45, 36, 36}, {495, 0, 0}, {45, 41, 41}, {441, 0, 0}, {45, 46, 46}, {392, 0, 0}, {45, 50, 50}, {348, 0, 0}, {45, 54, 54}, {309, 0, 0}, {45, 58, 58}, {274, 0, 0}, {45, 61, 61}, {242, 0, 0}, {45, 64, 64}, {213, 0, 0}, {45, 66, 66}, {187, 0, 0}, {45, 69, 69}, {164, 0, 0}, {45, 70, 70}, {155, 0, 0}, {6000, 30, 8}, {1000, 0, 0},
 };
+static const VibeRamp s_lab_calm_smooth[] = {  // 25 ramps, 10488 ms a wave
+    {333, 6, 7}, {333, 7, 11}, {333, 11, 18}, {333, 18, 26}, {333, 26, 35}, {333, 35, 45}, {333, 45, 56}, {333, 56, 65}, {333, 65, 73}, {333, 73, 80}, {333, 80, 84}, {333, 84, 85}, {416, 85, 84}, {416, 84, 80}, {416, 80, 73}, {416, 73, 65}, {416, 65, 56}, {416, 56, 46}, {416, 46, 35}, {416, 35, 26}, {416, 26, 18}, {416, 18, 11}, {416, 11, 7}, {416, 7, 6}, {1500, 6, 6},
+};
+static const VibeRamp s_lab_calm_smooth_gap[] = {  // 25 ramps, 10488 ms a wave
+    {333, 6, 7}, {333, 7, 11}, {333, 11, 18}, {333, 18, 26}, {333, 26, 35}, {333, 35, 45}, {333, 45, 56}, {333, 56, 65}, {333, 65, 73}, {333, 73, 80}, {333, 80, 84}, {333, 84, 85}, {416, 85, 84}, {416, 84, 80}, {416, 80, 73}, {416, 73, 65}, {416, 65, 56}, {416, 56, 46}, {416, 46, 35}, {416, 35, 26}, {416, 26, 18}, {416, 18, 11}, {416, 11, 7}, {416, 7, 6}, {1500, 0, 0},
+};
+static const VibeRamp s_lab_sleep_smooth[] = {  // 25 ramps, 15996 ms a wave
+    {500, 4, 5}, {500, 5, 7}, {500, 7, 10}, {500, 10, 14}, {500, 14, 19}, {500, 19, 24}, {500, 24, 30}, {500, 30, 35}, {500, 35, 39}, {500, 39, 42}, {500, 42, 44}, {500, 44, 45}, {583, 45, 44}, {583, 44, 42}, {583, 42, 39}, {583, 39, 35}, {583, 35, 30}, {583, 30, 25}, {583, 25, 19}, {583, 19, 14}, {583, 14, 10}, {583, 10, 7}, {583, 7, 5}, {583, 5, 4}, {3000, 4, 4},
+};
 // a heartbeat: lub, dub, rest (the rest set from the tempo); Doppel's calming beat is slower than the wearer's
 static VibeRamp s_lab_heart[] = {
     {60, 70, 70}, {140, 0, 0}, {45, 40, 40}, {755, 0, 0},
@@ -100,6 +109,9 @@ static const VibeProgram s_programs[VibeProgramCount] = {
     [VibeProgram_LabSleepEdges] = {"lab_sleep_edges", s_lab_sleep_edges, ARRAY_LEN(s_lab_sleep_edges), true},
     [VibeProgram_LabBreath] = {"lab_breath", s_lab_breath, ARRAY_LEN(s_lab_breath), true},
     [VibeProgram_LabHeart] = {"lab_heart", s_lab_heart, ARRAY_LEN(s_lab_heart), true},
+    [VibeProgram_LabCalmSmooth] = {"lab_calm_smooth", s_lab_calm_smooth, ARRAY_LEN(s_lab_calm_smooth), true},
+    [VibeProgram_LabCalmSmoothGap] = {"lab_calm_smooth_gap", s_lab_calm_smooth_gap, ARRAY_LEN(s_lab_calm_smooth_gap), true},
+    [VibeProgram_LabSleepSmooth] = {"lab_sleep_smooth", s_lab_sleep_smooth, ARRAY_LEN(s_lab_sleep_smooth), true},
 };
 
 const VibeProgram *vibe_program_get(VibeProgramId id) {

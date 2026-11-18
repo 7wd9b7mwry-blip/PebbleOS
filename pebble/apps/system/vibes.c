@@ -31,6 +31,7 @@ static const VibesChoice s_choices[] = {
     {VibeProgram_LabCalmFull, 2},   {VibeProgram_LabCalmFloor, 2}, {VibeProgram_LabCalmEdges, 2},
     {VibeProgram_LabCalmChop, 2},   {VibeProgram_LabCalmKick, 2},  {VibeProgram_LabSleepFloor, 2},
     {VibeProgram_LabSleepEdges, 2}, {VibeProgram_LabBreath, 2},    {VibeProgram_LabHeart, 2},
+    {VibeProgram_LabCalmSmooth, 2}, {VibeProgram_LabCalmSmoothGap, 2}, {VibeProgram_LabSleepSmooth, 2},
 };
 
 static const SimpleMenuItem s_items[] = {
@@ -52,6 +53,9 @@ static const SimpleMenuItem s_items[] = {
     {.title = "Lab: Sleep edges", .subtitle = "Pause, lowest, pause"},
     {.title = "Lab: Breath", .subtitle = "In: taps, out: hum"},
     {.title = "Lab: Heartbeat", .subtitle = "Slower than mine"},
+    {.title = "Lab: Calm smooth", .subtitle = "One wave, never stops"},
+    {.title = "Lab: Calm smooth gap", .subtitle = "Waves, a pause between"},
+    {.title = "Lab: Sleep smooth", .subtitle = "Soft continuous waves"},
 };
 
 typedef struct {
