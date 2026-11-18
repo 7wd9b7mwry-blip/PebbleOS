@@ -28,6 +28,9 @@ static const VibesChoice s_choices[] = {
     {VibeProgram_Calm, 5},     {VibeProgram_Calm, 15},  {VibeProgram_Relax, 10}, {VibeProgram_Meditate, 10},
     {VibeProgram_Sleep, 15},   {VibeProgram_Sleep, 30}, {VibeProgram_Focus, 10}, {VibeProgram_Energy, 15},
     {VibeProgram_Calm, 0},
+    {VibeProgram_LabCalmFull, 2},   {VibeProgram_LabCalmFloor, 2}, {VibeProgram_LabCalmEdges, 2},
+    {VibeProgram_LabCalmChop, 2},   {VibeProgram_LabCalmKick, 2},  {VibeProgram_LabSleepFloor, 2},
+    {VibeProgram_LabSleepEdges, 2}, {VibeProgram_LabBreath, 2},    {VibeProgram_LabHeart, 2},
 };
 
 static const SimpleMenuItem s_items[] = {
@@ -40,6 +43,15 @@ static const SimpleMenuItem s_items[] = {
     {.title = "Focus", .subtitle = "10 min, light ripples"},
     {.title = "Energy", .subtitle = "15 min, brisk swells"},
     {.title = "Stop", .subtitle = "End the one playing"},
+    {.title = "Lab: Calm full", .subtitle = "Calm, full range"},
+    {.title = "Lab: Calm floor", .subtitle = "Lowest in the gaps"},
+    {.title = "Lab: Calm edges", .subtitle = "Pause, lowest, pause"},
+    {.title = "Lab: Calm chopped", .subtitle = "Swell in short pieces"},
+    {.title = "Lab: Calm kick", .subtitle = "Crisp taps"},
+    {.title = "Lab: Sleep floor", .subtitle = "Lowest in the gaps"},
+    {.title = "Lab: Sleep edges", .subtitle = "Pause, lowest, pause"},
+    {.title = "Lab: Breath", .subtitle = "In: taps, out: hum"},
+    {.title = "Lab: Heartbeat", .subtitle = "Slower than mine"},
 };
 
 typedef struct {

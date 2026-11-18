@@ -27,8 +27,66 @@ P = {
   # up (the wake-up trial), not an alarm. Apollo's energy modes work on the same idea (fast rhythm = alerting)
   "energy":   (500, 700, 200, 300, 120, 35, 60, 35),
 }
-for name, args in P.items():
-    w = wave(*args)
+
+# The lab (Vibes app, Lab): variants of calm and sleep at the motor's full range, to compare on the wrist.
+LOW = 1      # the weakest non-zero strength (the player maps it to the floor, about 12 % of the drive)
+EDGE = 25    # ms of silence around the low level ("edges": silence makes the next change felt)
+
+
+def wave_floor(rise, fall, pause, gap_max, gap_min, s_lo, s_hi, tap):
+    """the gaps between taps at the lowest strength instead of silence"""
+    return [(ms, LOW, LOW) if a == 0 and ms < 1000 else (ms, a, b)
+            for ms, a, b in wave(rise, fall, pause, gap_max, gap_min, s_lo, s_hi, tap)]
+
+
+def wave_edges(rise, fall, pause, gap_max, gap_min, s_lo, s_hi, tap):
+    """tap, a moment of silence, the lowest strength, a moment of silence, the next tap"""
+    out = []
+    for ms, a, b in wave(rise, fall, pause, gap_max, gap_min, s_lo, s_hi, tap):
+        if a == 0 and ms < 1000 and ms > 2 * EDGE + 20:
+            out += [(EDGE, 0, 0), (ms - 2 * EDGE, LOW, LOW), (EDGE, 0, 0)]
+        else:
+            out.append((ms, a, b))
+    return out
+
+
+def wave_chop(rise, fall, pause, s_lo, s_hi, on=80, off=15):
+    """the smooth swell, cut into short pieces: every piece starts with an edge"""
+    out = []
+    for dur, a0, a1 in ((rise, s_lo, s_hi), (fall, s_hi, s_lo)):
+        t = 0
+        while t < dur:
+            out += [(on, int(a0 + (a1 - a0) * t / dur), int(a0 + (a1 - a0) * t / dur)), (off, 0, 0)]
+            t += on + off
+    return out + [(pause, 0, 0)]
+
+
+def wave_kick(rise, fall, pause, gap_max, gap_min, s_lo, s_hi, tap, kick=8):
+    """each tap starts with a short full-strength burst (overdrive: the LRA gets going at once, so taps are crisp)"""
+    out = []
+    for ms, a, b in wave(rise, fall, pause, gap_max, gap_min, s_lo, s_hi, tap):
+        out += [(kick, 100, 100), (ms - kick, a, b)] if a > 0 else [(ms, a, b)]
+    return out
+
+
+def breath(inhale=4000, exhale=6000, pause=1000):
+    """breathe in with taps closing in and rising, out with a soft continuous hum fading away: two textures"""
+    return wave(inhale, 1, 0, 600, 200, 30, 70, 45)[:-1] + [(exhale, 30, 8), (pause, 0, 0)]
+
+
+LAB = {
+    "lab_calm_full": wave(*P["calm"]),
+    "lab_calm_floor": wave_floor(*P["calm"]),
+    "lab_calm_edges": wave_edges(*P["calm"]),
+    "lab_calm_chop": wave_chop(4000, 5000, 1500, 25, 70),
+    "lab_calm_kick": wave_kick(*P["calm"]),
+    "lab_sleep_floor": wave_floor(*P["sleep"]),
+    "lab_sleep_edges": wave_edges(*P["sleep"]),
+    "lab_breath": breath(),
+}
+
+for name, w in list(P.items()) + [(k, None) for k in LAB]:
+    w = LAB[name] if w is None else wave(*w)
     assert len(w) < 255, (name, len(w))
     body = ", ".join(f"{{{a}, {b}, {c}}}" for a, b, c in w)
     print(f"static const VibeRamp s_{name}[] = {{  // {len(w)} ramps, {sum(r[0] for r in w)} ms a wave\n    {body},\n}};")

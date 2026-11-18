@@ -251,3 +251,17 @@ void test_habit_vibes__heart_rate_interval_adapts(void) {
   prv_minutes(1, 62, 45, 10, false, NULL);                          // settled again
   cl_assert_equal_i(smart_vibes_hr_interval_s(&s_sv, false), 300);
 }
+
+void test_habit_vibes__lab_heartbeat_follows_the_tempo(void) {
+  const VibeProgram *p = vibe_program_get(VibeProgram_LabHeart);
+  vibe_program_set_heart_bpm(60);
+  cl_assert_equal_i(vibe_program_length_ms(p), 1000);  // one beat a second
+  vibe_program_set_heart_bpm(200);                     // clamped to 90
+  cl_assert_equal_i(vibe_program_length_ms(p), 666);
+  vibe_program_set_heart_bpm(10);                      // clamped to 40
+  cl_assert_equal_i(vibe_program_length_ms(p), 1500);
+  for (int id = VibeProgram_LabFirst; id < VibeProgramCount; id++) {
+    cl_assert(vibe_program_get((VibeProgramId)id) != NULL);
+    cl_assert(vibe_program_get((VibeProgramId)id)->loops);
+  }
+}

@@ -30,6 +30,17 @@ typedef enum {
   VibeProgram_Posture,    //!< back posture nudge: two gentle swells (unlike the habit taps)
   VibeProgram_Relax,      //!< ~4.6 waves a minute, softer than calm
   VibeProgram_Meditate,   //!< ~5.5 waves a minute (resonance breathing)
+  // the lab (Vibes app): variants played at the motor's full range, to compare on the wrist
+  VibeProgram_LabFirst,
+  VibeProgram_LabCalmFull = VibeProgram_LabFirst,  //!< calm as it is, at the full range
+  VibeProgram_LabCalmFloor,  //!< the gaps at the lowest strength instead of silence
+  VibeProgram_LabCalmEdges,  //!< tap, silence, lowest, silence: the edges make each change felt
+  VibeProgram_LabCalmChop,   //!< the smooth swell cut into 80 ms pieces
+  VibeProgram_LabCalmKick,   //!< each tap starts with an 8 ms full-strength burst (crisp)
+  VibeProgram_LabSleepFloor,
+  VibeProgram_LabSleepEdges,
+  VibeProgram_LabBreath,     //!< in: taps closing in; out: a soft hum fading (two textures)
+  VibeProgram_LabHeart,      //!< a heartbeat slower than mine (Doppel): see vibe_program_set_heart_bpm
   VibeProgramCount,
 } VibeProgramId;
 
@@ -59,6 +70,9 @@ void vibe_player_start(VibePlayer *p, const VibeProgram *program, uint32_t max_m
 //! Next step to enqueue: duration and the motor strength (0 = off). Consecutive steps of equal
 //! strength are merged. Returns false when the program is over.
 bool vibe_player_next(VibePlayer *p, uint16_t *ms, uint8_t *strength);
+
+//! The heartbeat program's tempo, bpm (clamped to 40-90).
+void vibe_program_set_heart_bpm(uint8_t bpm);
 
 //! Total length of one pass of the program.
 uint32_t vibe_program_length_ms(const VibeProgram *program);

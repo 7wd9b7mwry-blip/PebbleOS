@@ -71,6 +71,7 @@ PBL_LOG_MODULE_DEFINE(service_habit, CONFIG_SERVICE_HABIT_LOG_LEVEL);
 #define BEACON_REFRESH_MIN 10   // battery level refresh; also re-arms after a Bluetooth restart
 #define SOUND_FRAME_SAMPLES 320   // 20 ms at 16 kHz
 #define SOUND_FRAMES 50           // one second a minute
+#define SOUND_SKIP_FRAMES 10      // the first 200 ms after the mic starts: its start-up, not the room
 #define POSTURE_PERIOD_MS 10000   // the scan timer; bursts every 10 s while the tag is worn ...
 #define POSTURE_BURST_MS 1200     // ... long enough for one 1 s advertisement of the tag
 #define POSTURE_PAIR_MIN_RSSI -65 // pairing: the tag must be right next to the watch
@@ -133,6 +134,7 @@ static struct {
   uint16_t grav_n;
   uint8_t near_s;
   bool sound_new;
+  uint8_t sound_skip;  //!< frames dropped since the mic started
   // false alarms (habit_negatives.h): the last alert, which a button press can mark
   HabitNegatives neg;
   uint32_t alert_at_ms;
@@ -402,6 +404,10 @@ static void prv_sound_frame(int16_t *samples, size_t count, void *context) {
   if (!s.sound_capturing || s.sound_done_posted) {
     return;
   }
+  if (s.sound_skip < SOUND_SKIP_FRAMES) {
+    s.sound_skip++;
+    return;
+  }
   sound_level_add(&s.sound_acc, samples, count);
   if (++s.sound_frames >= SOUND_FRAMES) {
     s.sound_done_posted = true;
@@ -423,6 +429,7 @@ static void prv_sound_start(void) {
   }
   sound_level_reset(&s.sound_acc);
   s.sound_frames = 0;
+  s.sound_skip = 0;
   s.sound_done_posted = false;
   s.sound_capturing = true;
   if (!mic_manager_acquire(MicClientSoundLevel, prv_sound_frame, nullptr, s_mic_buf,
@@ -852,7 +859,11 @@ static bool prv_play(VibeProgramId program, uint32_t max_ms, AirSource source, u
   if (vibe_pattern_is_owned_by(VibePatternOwner_Habit)) {
     vibe_pattern_clear_for_owner(VibePatternOwner_Habit);
   }
-  const int32_t scale = vibes_get_default_vibe_strength();  // the wearer's intensity setting
+  // the wearer's intensity setting; the lab plays at the motor's full range (so the variants compare fairly)
+  const int32_t scale = program >= VibeProgram_LabFirst ? 100 : vibes_get_default_vibe_strength();
+  if (program == VibeProgram_LabHeart) {   // 80 % of my heart rate (60 bpm without one)
+    vibe_program_set_heart_bpm((uint8_t)(s.bpm ? s.bpm * 4 / 5 : 60));
+  }
   vibe_player_start(&s.player, p, max_ms, (uint8_t)(scale > 100 ? 100 : (scale < 0 ? 0 : scale)),
                     FLOOR_PCT, STEP_MS);
   s.program = program;
