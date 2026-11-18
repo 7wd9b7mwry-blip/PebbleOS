@@ -20,30 +20,24 @@ typedef struct {
 } VibeRamp;
 
 typedef enum {
-  VibeProgram_Calm = 0,   //!< ~5.7 waves a minute: 4 s swelling (taps closer, stronger), 5 s ebbing, a pause
+  VibeProgram_Calm = 0,   //!< ~5.7 waves a minute: 4 s swelling, 5 s ebbing, 1.5 s low (smooth, never stops)
   VibeProgram_Sleep,      //!< very gentle, ~4 a minute: back to sleep / wind down
-  VibeProgram_Focus,      //!< steady gentle pulse, 30 a minute
-  VibeProgram_Energy,     //!< brisk pulses
+  VibeProgram_Focus,      //!< gentle ripples, 25 a minute
+  VibeProgram_Energy,     //!< brisk swells, ~43 a minute
   VibeProgram_HabitTap,   //!< habit alert level 1: two light taps
   VibeProgram_HabitPulse, //!< level 2: three firmer taps
   VibeProgram_HabitBuzz,  //!< level 3: two strong buzzes
   VibeProgram_Posture,    //!< back posture nudge: two gentle swells (unlike the habit taps)
   VibeProgram_Relax,      //!< ~4.6 waves a minute, softer than calm
   VibeProgram_Meditate,   //!< ~5.5 waves a minute (resonance breathing)
-  // the lab (Vibes app): variants played at the motor's full range, to compare on the wrist
+  // the lab (Vibes app): experiments at the motor's full range, to compare on the wrist (tools/habit/vibe_waves.py)
   VibeProgram_LabFirst,
-  VibeProgram_LabCalmFull = VibeProgram_LabFirst,  //!< calm as it is, at the full range
-  VibeProgram_LabCalmFloor,  //!< the gaps at the lowest strength instead of silence
-  VibeProgram_LabCalmEdges,  //!< tap, silence, lowest, silence: the edges make each change felt
-  VibeProgram_LabCalmChop,   //!< the smooth swell cut into 80 ms pieces
-  VibeProgram_LabCalmKick,   //!< each tap starts with an 8 ms full-strength burst (crisp)
-  VibeProgram_LabSleepFloor,
-  VibeProgram_LabSleepEdges,
-  VibeProgram_LabBreath,     //!< in: taps closing in; out: a soft hum fading (two textures)
-  VibeProgram_LabHeart,      //!< a heartbeat slower than mine (Doppel): see vibe_program_set_heart_bpm
-  VibeProgram_LabCalmSmooth,     //!< one continuous swell and ebb (eased), never stopping between waves
-  VibeProgram_LabCalmSmoothGap,  //!< the same with a moment of silence between waves
-  VibeProgram_LabSleepSmooth,    //!< sleep's breathing as a soft continuous swell
+  VibeProgram_LabHeart = VibeProgram_LabFirst,  //!< a heartbeat slower than mine (Doppel): vibe_program_set_heart_bpm
+  VibeProgram_LabSlowing,   //!< breathing led down from 10 to 6 a minute (plays once), then calm
+  VibeProgram_LabExhale,    //!< 4 s in, 8 s out
+  VibeProgram_LabCoherent,  //!< 5.5 s in, 5.5 s out
+  VibeProgram_LabRocking,   //!< a soft 4 s rise and fall (rocking, about 0.25 Hz), for falling asleep
+  VibeProgram_LabCalmGap,   //!< calm with a moment of silence between waves
   VibeProgramCount,
 } VibeProgramId;
 

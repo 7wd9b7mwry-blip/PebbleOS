@@ -55,7 +55,7 @@ PBL_LOG_MODULE_DEFINE(service_habit, CONFIG_SERVICE_HABIT_LOG_LEVEL);
 #define QUEUE_AHEAD_MS 2000    // keep this much of a program queued on the motor
 #define REFILL_MS 500
 #define STEP_MS 50
-#define LAB_STEP_MS 25         // the lab's ramps in finer steps (the smooth waves)
+#define WAVE_STEP_MS 25        // the wave programs' ramps in finer steps (smooth)
 #define FLOOR_PCT 12           // weakest strength the LRA is felt at (to tune on the watch)
 #define HR_FRESH_SLACK_MS (2 * 60 * 1000)  // a reading stays current this long past its interval
 #define MIN_HR_CONFIDENCE 50
@@ -848,6 +848,9 @@ static bool prv_play(VibeProgramId program, uint32_t max_ms, AirSource source, u
   if (!p) {
     return false;
   }
+  if (program == VibeProgram_LabSlowing && !prv_play(VibeProgram_Calm, max_ms, source, level)) {
+    return false;   // calm for the play time, the slowing waves over it once (calm resumes after them)
+  }
   prv_air(AirKind_Play, (uint8_t)program, (uint8_t)source, level, 0, max_ms);
   if (p->loops) {
     prv_wave_end(AirEnd_Replaced);
@@ -867,13 +870,15 @@ static bool prv_play(VibeProgramId program, uint32_t max_ms, AirSource source, u
   if (vibe_pattern_is_owned_by(VibePatternOwner_Habit)) {
     vibe_pattern_clear_for_owner(VibePatternOwner_Habit);
   }
-  // the wearer's intensity setting; the lab plays at the motor's full range (so the variants compare fairly)
-  const int32_t scale = program >= VibeProgram_LabFirst ? 100 : vibes_get_default_vibe_strength();
+  // the wave programs at the motor's full range (their own strengths are the design); the alerts and nudges follow
+  // the wearer's intensity setting
+  const bool wave = p->loops || program >= VibeProgram_LabFirst;
+  const int32_t scale = wave ? 100 : vibes_get_default_vibe_strength();
   if (program == VibeProgram_LabHeart) {   // 80 % of my heart rate (60 bpm without one)
     vibe_program_set_heart_bpm((uint8_t)(s.bpm ? s.bpm * 4 / 5 : 60));
   }
   vibe_player_start(&s.player, p, max_ms, (uint8_t)(scale > 100 ? 100 : (scale < 0 ? 0 : scale)),
-                    FLOOR_PCT, program >= VibeProgram_LabFirst ? LAB_STEP_MS : STEP_MS);
+                    FLOOR_PCT, wave ? WAVE_STEP_MS : STEP_MS);
   s.program = program;
   s.playing = true;
   s.queued_until_ms = 0;

@@ -51,20 +51,13 @@ void test_habit_vibes__calm_waves_for_its_budget(void) {
   const Played r = prv_play(VibeProgram_Calm, 60000, 100, 0);
   cl_assert_equal_i(r.total_ms, 60000);
   cl_assert(r.rose && r.fell);
-  cl_assert(r.max_s <= 70 && r.max_s >= 65);
-  // a tap train, not a hum: mostly off, and the gaps between taps narrow as a wave swells
-  cl_assert(r.on_ms < r.total_ms / 4);
-  VibePlayer p;
-  vibe_player_start(&p, vibe_program_get(VibeProgram_Calm), 11000, 100, 0, 50);
-  uint16_t ms, min_gap = 0xFFFF, max_gap = 0;
-  uint8_t s;
-  while (vibe_player_next(&p, &ms, &s)) {
-    if (s == 0 && ms < 1000) {   // a gap between taps (not the pause after a wave)
-      min_gap = ms < min_gap ? ms : min_gap;
-      max_gap = ms > max_gap ? ms : max_gap;
-    }
-  }
-  cl_assert(min_gap * 2 < max_gap);
+  cl_assert(r.max_s <= 85 && r.max_s >= 80);
+  // smooth: one continuous vibration (never off between waves), swelling from its floor and back
+  cl_assert_equal_i(r.on_ms, r.total_ms);
+  cl_assert(r.min_on_s >= 6 && r.min_on_s <= 8);
+  // and the gap variant has its moment of silence
+  const Played g = prv_play(VibeProgram_LabCalmGap, 60000, 100, 0);
+  cl_assert(g.on_ms < g.total_ms && g.on_ms > g.total_ms * 3 / 4);
 }
 
 void test_habit_vibes__one_shot_plays_once(void) {
@@ -262,6 +255,6 @@ void test_habit_vibes__lab_heartbeat_follows_the_tempo(void) {
   cl_assert_equal_i(vibe_program_length_ms(p), 1500);
   for (int id = VibeProgram_LabFirst; id < VibeProgramCount; id++) {
     cl_assert(vibe_program_get((VibeProgramId)id) != NULL);
-    cl_assert(vibe_program_get((VibeProgramId)id)->loops);
+    cl_assert(vibe_program_get((VibeProgramId)id)->loops || id == VibeProgram_LabSlowing);
   }
 }
