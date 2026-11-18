@@ -67,8 +67,9 @@ static const VibeRamp s_habit_buzz[] = {
     {600, 100, 100}, {250, 0, 0}, {600, 100, 100},
 };
 
+// three firm rising pulses (unlike the habit taps), at the full range
 static const VibeRamp s_posture[] = {
-    {300, 10, 55}, {300, 55, 10}, {250, 0, 0}, {300, 10, 55}, {300, 55, 10},
+    {150, 40, 100}, {120, 0, 0}, {150, 40, 100}, {120, 0, 0}, {220, 50, 100},
 };
 
 static const VibeProgram s_programs[VibeProgramCount] = {

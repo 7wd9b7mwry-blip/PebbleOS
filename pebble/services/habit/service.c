@@ -79,6 +79,7 @@ PBL_LOG_MODULE_DEFINE(service_habit, CONFIG_SERVICE_HABIT_LOG_LEVEL);
 #define POSTURE_UPRIGHT_MAX_AGE_S 90  // "upright now" needs a tag reading this recent
 #define WALKING_STEPS_PER_MIN 60  // a minute with this many steps teaches the upright reference
 #define FALSE_ALARM_WINDOW_MS 15000   // a button press this soon after a habit buzz marks it a false alarm
+#define POSTURE_LEARN_MOVED_S 60   // the card moved (more than the scanner's still_mg) this recently
 #define HOME_SCAN_PERIOD_MS 60000   // listen for home commands (home_cmd.h) a burst a minute ...
 #define HOME_BURST_MS 600           // ... the home device advertises every 20-40 ms
 #define GYRO_BUF 64             // > 2 s at 26 Hz
@@ -614,7 +615,10 @@ static void prv_posture_burst_kbg(void *unused) {
   posture_scan_result(&s.scanner, now_s, &avg);
   s.posture_last_acc = avg;
   s.posture_last_s = now_s;
-  if (posture_feed(&s.posture, now_s, &avg, s.walking) && !s.playing &&
+  // walking teaches the upright reference only with the card moving too (worn): a card left lying while I walk
+  // (2026-11-18) taught the table's angle, so worn it read ~100 degrees off and never nudged
+  const bool worn_walk = s.walking && now_s - s.scanner.still_since_s < POSTURE_LEARN_MOVED_S;
+  if (posture_feed(&s.posture, now_s, &avg, worn_walk) && !s.playing &&
       !vibe_pattern_is_owned_by(VibePatternOwner_Habit)) {
     s.posture_alerts++;
     prv_log(HabitLogKind_PostureAlert, 0, 0, (uint16_t)(s.posture.last_cos_x1000 + 1000), 0, 0);
@@ -873,7 +877,8 @@ static bool prv_play(VibeProgramId program, uint32_t max_ms, AirSource source, u
   // the wave programs at the motor's full range (their own strengths are the design); the alerts and nudges follow
   // the wearer's intensity setting
   const bool wave = p->loops || program >= VibeProgram_LabFirst;
-  const int32_t scale = wave ? 100 : vibes_get_default_vibe_strength();
+  // the wave programs and the posture nudge at the full range; the habit alerts follow the intensity setting
+  const int32_t scale = (wave || program == VibeProgram_Posture) ? 100 : vibes_get_default_vibe_strength();
   if (program == VibeProgram_LabHeart) {   // 80 % of my heart rate (60 bpm without one)
     vibe_program_set_heart_bpm((uint8_t)(s.bpm ? s.bpm * 4 / 5 : 60));
   }
