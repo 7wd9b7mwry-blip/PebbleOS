@@ -174,6 +174,13 @@ static struct {
   int32_t last_scan_rc;
   uint8_t regions_calibrated;
   uint16_t minutes_since_save;
+  struct {
+    uint8_t grip;     //!< being captured (0: none)
+    uint8_t left_s;   //!< seconds still to take
+    uint8_t n;
+    int32_t sum[3];
+    uint32_t motion_sum;
+  } grip;
 } s;
 
 // while a program plays: top the motor's queue up every REFILL_MS (on the system work queue, like everything here)
@@ -927,6 +934,22 @@ static void prv_accel_cb(AccelData *data, uint32_t num_samples) {
   s.grav_sum[1] += grav.y;
   s.grav_sum[2] += grav.z;
   s.grav_n++;
+  if (s.grip.grip && s.grip.left_s) {   // a grip being captured: about one sample a second
+    s.grip.sum[0] += grav.x;
+    s.grip.sum[1] += grav.y;
+    s.grip.sum[2] += grav.z;
+    s.grip.motion_sum += fine;
+    s.grip.n++;
+    if (--s.grip.left_s == 0 && s.grip.n) {
+      const int16_t gx = (int16_t)(s.grip.sum[0] / s.grip.n), gy = (int16_t)(s.grip.sum[1] / s.grip.n),
+                    gz = (int16_t)(s.grip.sum[2] / s.grip.n);
+      const uint32_t mot = s.grip.motion_sum / s.grip.n;
+      prv_air(AirKind_Grip, s.grip.grip, s.grip.n, (uint16_t)gx, (uint16_t)gy,
+              (uint32_t)(uint16_t)gz | ((mot > 0xFFFF ? 0xFFFF : mot) << 16));
+      PBL_LOG_INFO("grip %u: %d %d %d, motion %lu", s.grip.grip, gx, gy, gz, (unsigned long)mot);
+      s.grip.grip = 0;
+    }
+  }
   if (habit_detect_current_region(&s.det) != HabitRegion_None && s.near_s < 255) {
     s.near_s++;
   }
@@ -1383,6 +1406,28 @@ static void prv_reset_calibration_kbg(void *unused) {
   memcpy(s.det.cfg.regions, dcfg.regions, sizeof(dcfg.regions));
   s.regions_calibrated = 0;
   prv_save_regions();
+}
+
+static void prv_grip_kbg(void *arg) {
+  const uint32_t v = (uint32_t)(uintptr_t)arg;
+  memset(&s.grip, 0, sizeof(s.grip));
+  if ((v & 0xFF) == 0) {
+    prv_air(AirKind_Grip, 0, 0, 0, 0, 0);
+    return;
+  }
+  s.grip.grip = (uint8_t)(v & 0xFF);
+  s.grip.left_s = (uint8_t)(v >> 8);
+}
+
+void habit_service_grip_capture(uint8_t grip, uint8_t seconds) {
+  if (grip == 0 || seconds == 0) {
+    return;
+  }
+  pbl_sys_work_call(prv_grip_kbg, (void *)(uintptr_t)(grip | ((uint32_t)seconds << 8)));
+}
+
+void habit_service_grip_forget(void) {
+  pbl_sys_work_call(prv_grip_kbg, (void *)(uintptr_t)0);
 }
 
 void habit_service_reset_calibration(void) {

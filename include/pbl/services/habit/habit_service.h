@@ -118,6 +118,13 @@ bool habit_service_posture_set_upright(void);
 //! Forget the calibrated regions (back to the generic "hand at the head" default).
 void habit_service_reset_calibration(void);
 
+//! A grip to recognise (held the way it is used): the wrist's mean direction and fine motion over `seconds`, sent
+//! as an AirKind_Grip record (the server keeps the templates and matches the minutes). 1 controller, 2 phone.
+void habit_service_grip_capture(uint8_t grip, uint8_t seconds);
+
+//! Forget every grip captured so far (an AirKind_Grip record with grip 0).
+void habit_service_grip_forget(void);
+
 typedef struct {
   bool running;
   HabitRegion region_now;

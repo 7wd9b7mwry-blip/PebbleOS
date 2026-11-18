@@ -37,6 +37,8 @@ typedef enum {
   AirKind_PostureAlert = 9,  //!< c: cos + 1000
   AirKind_Quiet = 10,        //!< c: minutes (0: alerts on again)
   AirKind_Label = 11,        //!< a: 1 habit, 2 false alarm
+  AirKind_Grip = 12,         //!< a: grip (1 controller, 2 phone; 0: forget them all), b: seconds held,
+                             //!< c, d: mean gravity x, y (mG, int16), e: z (int16, low half) | mean fine motion << 16
 } AirKind;
 
 typedef enum {
