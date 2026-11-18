@@ -283,6 +283,15 @@ static void prv_load_settings(void) {
     s.posture_on = v != 0;
   }
   prv_settings_get(KEY_POSTURE_TAG, s.posture_tag, sizeof(s.posture_tag));
+#ifdef POSTURE_TAG_DEFAULT
+  {  // nothing paired or set: the build's default tag (home_key.h)
+    static const uint8_t zero[6] = {0};
+    static const uint8_t def[6] = POSTURE_TAG_DEFAULT;
+    if (memcmp(s.posture_tag, zero, sizeof(zero)) == 0) {
+      memcpy(s.posture_tag, def, sizeof(def));
+    }
+  }
+#endif
   s.home_key_set = prv_settings_get(KEY_HOME_KEY, s.home_key, sizeof(s.home_key));
   if (!prv_settings_get(KEY_NEG, &s.neg, sizeof(s.neg)) || s.neg.version != HABIT_NEG_VERSION) {
     habit_negatives_init(&s.neg);
