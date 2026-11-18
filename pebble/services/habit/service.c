@@ -220,6 +220,8 @@ static const char KEY_SOUND[] = "sound";
 static const char KEY_MODEL[] = "model";
 static const char KEY_POSTURE[] = "posture";
 static const char KEY_POSTURE_TAG[] = "posture_tag";
+static const char KEY_POSTURE_TAG_V[] = "posture_tag_v";
+#define POSTURE_TAG_VERSION 2   // 2: the E8 on the back (2026-11-18) replaces whatever tag was saved before
 static const char KEY_HOLDOUT[] = "holdout";
 static const char KEY_HOME_KEY[] = "home_key";
 static const char KEY_NEG[] = "neg";
@@ -301,7 +303,16 @@ static void prv_load_settings(void) {
   {  // nothing paired or set: the build's default tag (home_key.h)
     static const uint8_t zero[6] = {0};
     static const uint8_t def[6] = POSTURE_TAG_DEFAULT;
-    if (memcmp(s.posture_tag, zero, sizeof(zero)) == 0) {
+    uint8_t ver = 0;
+    prv_settings_get(KEY_POSTURE_TAG_V, &ver, 1);
+    if (ver != POSTURE_TAG_VERSION) {
+      // once: the build's tag, whatever was saved (the C10 card was, so the E8 default never applied); its upright
+      // (kept in memory only) is learned anew after the restart anyway. A tag paired from the Habits app later keeps
+      memcpy(s.posture_tag, def, sizeof(def));
+      prv_settings_set(KEY_POSTURE_TAG, s.posture_tag, sizeof(s.posture_tag));
+      ver = POSTURE_TAG_VERSION;
+      prv_settings_set(KEY_POSTURE_TAG_V, &ver, 1);
+    } else if (memcmp(s.posture_tag, zero, sizeof(zero)) == 0) {
       memcpy(s.posture_tag, def, sizeof(def));
     }
   }

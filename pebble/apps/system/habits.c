@@ -66,6 +66,7 @@ typedef struct {
   SimpleMenuItem items[ITEM_COUNT];
   SimpleMenuSection sections[5];
   char sub[ITEM_COUNT][40];
+  char tag_buf[40];   // the back tag listened to (its last two bytes)
   AppTimer *refresh_timer;
   // the calibration window
   Window cal_window;
@@ -104,8 +105,9 @@ static void prv_refresh(HabitsData *d) {
   snprintf(d->sub[ITEM_GRIP_FORGET], sizeof(d->sub[0]), "%s", "Start the grips over");
   snprintf(d->sub[ITEM_UPRIGHT], sizeof(d->sub[0]), "Now: %s", state);
   snprintf(d->sub[ITEM_POSTURE_FORGET], sizeof(d->sub[0]), "%s", "Learn it again walking");
+  snprintf(d->tag_buf, sizeof(d->tag_buf), "Now ..%02X:%02X: hold another, Select", st.posture_tag[4], st.posture_tag[5]);
   snprintf(d->sub[ITEM_POSTURE_PAIR], sizeof(d->sub[0]), "%s",
-           st.posture_pairing ? "Listening: hold the tag to the watch" : "Hold it to the watch, then Select");
+           st.posture_pairing ? "Listening: hold the tag to the watch" : d->tag_buf);
   snprintf(d->sub[ITEM_PAUSE], sizeof(d->sub[0]), "%s", "No habit buzzes for 1 h");
   snprintf(d->sub[ITEM_RESUME], sizeof(d->sub[0]), "%s", "Buzzes on again");
   snprintf(d->sub[ITEM_HABIT], sizeof(d->sub[0]), "%s", "Mark the last few seconds");
