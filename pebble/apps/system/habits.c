@@ -8,7 +8,8 @@
 //!  - Forget the calibration.
 //!  - Grips (holding a controller, holding a phone): Select, hold it the way it is used; after the countdown and a
 //!    buzz, 20 s of it; a double buzz when done. Once per position (sitting, reclined, lying); the server keeps them.
-//!  - Posture: "upright now" from the back tag's latest reading (else it is learned when walking); forget it.
+//!  - Posture: "upright now" from the back tag's latest reading (else it is learned when walking); forget it; use
+//!    the tag held to the watch as the back tag (pairing: the strongest of the next burst).
 //!  - Alerts: pause an hour, or on again; "that was a habit" labels the last few seconds (a missed one).
 //!  - Settings (persisted by the service): habit buzzes, alerts while asleep, back posture, the classifier, sound
 //!    level, the presence beacon; each row shows On / Off and Select flips it.
@@ -44,7 +45,7 @@
 enum {
   ITEM_MOUTH, ITEM_NOSE, ITEM_FACE, ITEM_HAIR, ITEM_FORGET,
   ITEM_GRIP_PAD, ITEM_GRIP_PHONE, ITEM_GRIP_FORGET,
-  ITEM_UPRIGHT, ITEM_POSTURE_FORGET,
+  ITEM_UPRIGHT, ITEM_POSTURE_FORGET, ITEM_POSTURE_PAIR,
   ITEM_PAUSE, ITEM_RESUME, ITEM_HABIT,
   ITEM_VIBRATE, ITEM_ASLEEP, ITEM_POSTURE, ITEM_MODEL, ITEM_SOUND, ITEM_BEACON,
   ITEM_COUNT
@@ -103,6 +104,8 @@ static void prv_refresh(HabitsData *d) {
   snprintf(d->sub[ITEM_GRIP_FORGET], sizeof(d->sub[0]), "%s", "Start the grips over");
   snprintf(d->sub[ITEM_UPRIGHT], sizeof(d->sub[0]), "Now: %s", state);
   snprintf(d->sub[ITEM_POSTURE_FORGET], sizeof(d->sub[0]), "%s", "Learn it again walking");
+  snprintf(d->sub[ITEM_POSTURE_PAIR], sizeof(d->sub[0]), "%s",
+           st.posture_pairing ? "Listening: hold the tag to the watch" : "Hold it to the watch, then Select");
   snprintf(d->sub[ITEM_PAUSE], sizeof(d->sub[0]), "%s", "No habit buzzes for 1 h");
   snprintf(d->sub[ITEM_RESUME], sizeof(d->sub[0]), "%s", "Buzzes on again");
   snprintf(d->sub[ITEM_HABIT], sizeof(d->sub[0]), "%s", "Mark the last few seconds");
@@ -277,6 +280,10 @@ static void prv_select(int index, void *ctx) {
     case ITEM_POSTURE_FORGET:
       habit_service_posture_forget();
       break;
+    case ITEM_POSTURE_PAIR:   // the strongest tag of the next burst becomes the back tag (upright learned anew)
+      habit_service_posture_pair();
+      vibes_short_pulse();
+      break;
     case ITEM_PAUSE:
       habit_service_set_quiet(60);
       break;
@@ -320,7 +327,7 @@ static void prv_window_load(Window *window) {
   static const char *const titles[ITEM_COUNT] = {
       "Mouth", "Nose", "Face", "Hair", "Forget calibration",
       "Holding controller", "Holding phone", "Forget grips",
-      "Upright now", "Forget upright",
+      "Upright now", "Forget upright", "Use the tag I'm holding",
       "Pause alerts", "Alerts on", "That was a habit",
       "Habit buzzes", "While asleep", "Posture", "Classifier", "Sound level", "Beacon",
   };
@@ -330,7 +337,7 @@ static void prv_window_load(Window *window) {
   }
   d->sections[0] = (SimpleMenuSection){.title = "Calibrate", .items = &d->items[ITEM_MOUTH], .num_items = 5};
   d->sections[1] = (SimpleMenuSection){.title = "Grips", .items = &d->items[ITEM_GRIP_PAD], .num_items = 3};
-  d->sections[2] = (SimpleMenuSection){.title = "Posture", .items = &d->items[ITEM_UPRIGHT], .num_items = 2};
+  d->sections[2] = (SimpleMenuSection){.title = "Posture", .items = &d->items[ITEM_UPRIGHT], .num_items = 3};
   d->sections[3] = (SimpleMenuSection){.title = "Alerts", .items = &d->items[ITEM_PAUSE], .num_items = 3};
   d->sections[4] = (SimpleMenuSection){.title = "Settings", .items = &d->items[ITEM_VIBRATE], .num_items = 6};
   prv_refresh(d);
