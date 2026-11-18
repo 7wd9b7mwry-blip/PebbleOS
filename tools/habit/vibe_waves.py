@@ -23,6 +23,9 @@ P = {
   "sleep":    (6000, 7000, 3000, 900, 350, 12, 40, 40),   # ~3.75/min, very soft, sparse
   "meditate": (4500, 5500, 1000, 650, 200, 20, 65, 45),   # ~5.5/min (resonance breathing)
   "focus":    (800, 1200, 400, 400, 180, 30, 55, 35),     # quick gentle ripples, 25/min
+  # brisk: a swell every 1.8 s of taps 3-8 a second (quicker than a resting heart), firmer than calm but under the alerts; for waking
+  # up (the wake-up trial), not an alarm. Apollo's energy modes work on the same idea (fast rhythm = alerting)
+  "energy":   (500, 700, 200, 300, 120, 35, 60, 35),
 }
 for name, args in P.items():
     w = wave(*args)
