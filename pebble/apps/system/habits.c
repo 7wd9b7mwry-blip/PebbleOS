@@ -8,6 +8,8 @@
 //!  - Forget the calibration.
 //!  - Posture: "upright now" from the back tag's latest reading (else it is learned when walking); forget it.
 //!  - Alerts: pause an hour, or on again; "that was a habit" labels the last few seconds (a missed one).
+//!  - Settings (persisted by the service): habit buzzes, alerts while asleep, back posture, the classifier, sound
+//!    level, the presence beacon; each row shows On / Off and Select flips it.
 //! A false alarm is still a button press right after the buzz (habit_service_button_claim).
 
 #include "habits.h"
@@ -39,6 +41,7 @@ enum {
   ITEM_MOUTH, ITEM_NOSE, ITEM_FACE, ITEM_HAIR, ITEM_FORGET,
   ITEM_UPRIGHT, ITEM_POSTURE_FORGET,
   ITEM_PAUSE, ITEM_RESUME, ITEM_HABIT,
+  ITEM_VIBRATE, ITEM_ASLEEP, ITEM_POSTURE, ITEM_MODEL, ITEM_SOUND, ITEM_BEACON,
   ITEM_COUNT
 };
 
@@ -52,8 +55,9 @@ typedef struct {
   Window window;
   SimpleMenuLayer *menu;
   SimpleMenuItem items[ITEM_COUNT];
-  SimpleMenuSection sections[3];
-  char sub[ITEM_COUNT][32];
+  SimpleMenuSection sections[4];
+  char sub[ITEM_COUNT][40];
+  AppTimer *refresh_timer;
   // the calibration window
   Window cal_window;
   TextLayer *cal_text;
@@ -91,9 +95,21 @@ static void prv_refresh(HabitsData *d) {
   snprintf(d->sub[ITEM_PAUSE], sizeof(d->sub[0]), "%s", "No habit buzzes for 1 h");
   snprintf(d->sub[ITEM_RESUME], sizeof(d->sub[0]), "%s", "Buzzes on again");
   snprintf(d->sub[ITEM_HABIT], sizeof(d->sub[0]), "%s", "Mark the last few seconds");
+  const bool on[] = {st.vibrate, st.alerts_while_asleep, st.posture, st.model, st.sound, st.beacon};
+  static const char *const what[] = {"Buzz on a habit", "Habit alerts in bed", "Read the back card",
+                                     "Classifier (off: motion rule)", "Sound level a minute", "Room presence"};
+  for (int i = 0; i < 6; i++) {
+    snprintf(d->sub[ITEM_VIBRATE + i], sizeof(d->sub[0]), "%s: %s", on[i] ? "On" : "Off", what[i]);
+  }
   if (d->menu) {
     layer_mark_dirty(simple_menu_layer_get_layer(d->menu));
   }
+}
+
+static void prv_refresh_later(void *ctx) {
+  HabitsData *d = ctx;
+  d->refresh_timer = NULL;
+  prv_refresh(d);
 }
 
 // ---- calibration
@@ -221,14 +237,32 @@ static void prv_select(int index, void *ctx) {
     case ITEM_HABIT:
       habit_service_label(1);
       break;
+    case ITEM_VIBRATE: case ITEM_ASLEEP: case ITEM_POSTURE: case ITEM_MODEL: case ITEM_SOUND: case ITEM_BEACON: {
+      HabitServiceStatus st;
+      habit_service_get_status(&st);
+      switch (index) {
+        case ITEM_VIBRATE: habit_service_set_vibrate(!st.vibrate); break;
+        case ITEM_ASLEEP: habit_service_set_alerts_while_asleep(!st.alerts_while_asleep); break;
+        case ITEM_POSTURE: habit_service_set_posture(!st.posture); break;
+        case ITEM_MODEL: habit_service_set_model(!st.model); break;
+        case ITEM_SOUND: habit_service_set_sound(!st.sound); break;
+        default: habit_service_set_beacon(!st.beacon); break;
+      }
+      break;
+    }
   }
   vibes_short_pulse();
   prv_refresh(d);
+  // the service applies a change on its own task: show it again a moment later
+  if (!d->refresh_timer) {
+    d->refresh_timer = app_timer_register(400, prv_refresh_later, d);
+  }
 }
 
 static void prv_select_cal(int index, void *ctx);
 static void prv_select_posture(int index, void *ctx);
 static void prv_select_alerts(int index, void *ctx);
+static void prv_select_settings(int index, void *ctx);
 
 static void prv_window_load(Window *window) {
   HabitsData *d = window_get_user_data(window);
@@ -237,15 +271,18 @@ static void prv_window_load(Window *window) {
       "Mouth", "Nose", "Face", "Hair", "Forget calibration",
       "Upright now", "Forget upright",
       "Pause alerts", "Alerts on", "That was a habit",
+      "Habit buzzes", "While asleep", "Posture", "Classifier", "Sound level", "Beacon",
   };
   for (int i = 0; i < ITEM_COUNT; i++) {
-    d->items[i] = (SimpleMenuItem){.title = titles[i], .subtitle = d->sub[i], .callback = i < ITEM_UPRIGHT ? prv_select_cal : i < ITEM_PAUSE ? prv_select_posture : prv_select_alerts};
+    d->items[i] = (SimpleMenuItem){.title = titles[i], .subtitle = d->sub[i], .callback = i < ITEM_UPRIGHT ? prv_select_cal : i < ITEM_PAUSE ? prv_select_posture
+                                   : i < ITEM_VIBRATE ? prv_select_alerts : prv_select_settings};
   }
   d->sections[0] = (SimpleMenuSection){.title = "Calibrate", .items = &d->items[ITEM_MOUTH], .num_items = 5};
   d->sections[1] = (SimpleMenuSection){.title = "Posture", .items = &d->items[ITEM_UPRIGHT], .num_items = 2};
   d->sections[2] = (SimpleMenuSection){.title = "Alerts", .items = &d->items[ITEM_PAUSE], .num_items = 3};
+  d->sections[3] = (SimpleMenuSection){.title = "Settings", .items = &d->items[ITEM_VIBRATE], .num_items = 6};
   prv_refresh(d);
-  d->menu = simple_menu_layer_create(layer_get_bounds_by_value(root), window, d->sections, 3, d);
+  d->menu = simple_menu_layer_create(layer_get_bounds_by_value(root), window, d->sections, 4, d);
   layer_add_child(root, simple_menu_layer_get_layer(d->menu));
 }
 
@@ -253,6 +290,7 @@ static void prv_window_load(Window *window) {
 static void prv_select_cal(int index, void *ctx) { prv_select(ITEM_MOUTH + index, ctx); }
 static void prv_select_posture(int index, void *ctx) { prv_select(ITEM_UPRIGHT + index, ctx); }
 static void prv_select_alerts(int index, void *ctx) { prv_select(ITEM_PAUSE + index, ctx); }
+static void prv_select_settings(int index, void *ctx) { prv_select(ITEM_VIBRATE + index, ctx); }
 
 static void prv_window_appear(Window *window) {
   prv_refresh(window_get_user_data(window));
@@ -260,6 +298,10 @@ static void prv_window_appear(Window *window) {
 
 static void prv_window_unload(Window *window) {
   HabitsData *d = window_get_user_data(window);
+  if (d->refresh_timer) {
+    app_timer_cancel(d->refresh_timer);
+    d->refresh_timer = NULL;
+  }
   simple_menu_layer_destroy(d->menu);
   d->menu = NULL;
 }
