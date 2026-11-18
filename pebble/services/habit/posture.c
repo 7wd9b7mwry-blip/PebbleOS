@@ -74,6 +74,17 @@ void posture_forget_reference(PostureDetector *d) {
   d->alerted = false;
 }
 
+void posture_set_reference(PostureDetector *d, const HabitVec *acc_mg) {
+  d->ref[0] = acc_mg->x * FX;
+  d->ref[1] = acc_mg->y * FX;
+  d->ref[2] = acc_mg->z * FX;
+  d->ref_count = d->cfg.ref_n;   // weighs as much as a walk's worth
+  d->calibrated = true;
+  d->state = PostureState_Upright;
+  d->slouch_since_s = 0;
+  d->alerted = false;
+}
+
 static int64_t prv_isqrt(int64_t v) {
   if (v <= 0) {
     return 0;

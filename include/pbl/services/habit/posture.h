@@ -72,6 +72,10 @@ bool posture_feed(PostureDetector *d, uint32_t t_s, const HabitVec *acc_mg, bool
 //! The reference changes when the tag is re-mounted: forget it (it is learned again when walking).
 void posture_forget_reference(PostureDetector *d);
 
+//! "Upright now" (the wearer, from the Habits app): this reading becomes the upright reference at once; walking
+//! keeps refining it as before.
+void posture_set_reference(PostureDetector *d, const HabitVec *acc_mg);
+
 typedef struct {
   uint16_t readings;
   uint16_t slouched;     //!< readings judged slouched

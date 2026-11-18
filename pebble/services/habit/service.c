@@ -74,6 +74,7 @@ PBL_LOG_MODULE_DEFINE(service_habit, CONFIG_SERVICE_HABIT_LOG_LEVEL);
 #define POSTURE_PERIOD_MS 10000   // the scan timer; bursts every 10 s while the tag is worn ...
 #define POSTURE_BURST_MS 1200     // ... long enough for one 1 s advertisement of the tag
 #define POSTURE_PAIR_MIN_RSSI -65 // pairing: the tag must be right next to the watch
+#define POSTURE_UPRIGHT_MAX_AGE_S 90  // "upright now" needs a tag reading this recent
 #define WALKING_STEPS_PER_MIN 60  // a minute with this many steps teaches the upright reference
 #define FALSE_ALARM_WINDOW_MS 15000   // a button press this soon after a habit buzz marks it a false alarm
 #define HOME_SCAN_PERIOD_MS 60000   // listen for home commands (home_cmd.h) a burst a minute ...
@@ -166,6 +167,8 @@ static struct {
   int32_t last_steps;
   uint8_t tag_battery;
   uint32_t posture_readings, posture_alerts, scans_ok, scans_failed;
+  HabitVec posture_last_acc;   // the tag's last reading (for "upright now")
+  uint32_t posture_last_s;
   int32_t last_scan_rc;
   uint8_t regions_calibrated;
   uint16_t minutes_since_save;
@@ -594,6 +597,8 @@ static void prv_posture_burst_kbg(void *unused) {
   const HabitVec avg = {(int16_t)(got.sum[0] / got.n), (int16_t)(got.sum[1] / got.n),
                         (int16_t)(got.sum[2] / got.n)};
   posture_scan_result(&s.scanner, now_s, &avg);
+  s.posture_last_acc = avg;
+  s.posture_last_s = now_s;
   if (posture_feed(&s.posture, now_s, &avg, s.walking) && !s.playing &&
       !vibe_pattern_is_owned_by(VibePatternOwner_Habit)) {
     s.posture_alerts++;
@@ -1478,6 +1483,20 @@ void habit_service_posture_set_tag(const uint8_t mac_msb_first[6]) {
 
 static void prv_posture_forget_kbg(void *unused) {
   posture_forget_reference(&s.posture);
+}
+
+static void prv_posture_upright_kbg(void *unused) {
+  posture_set_reference(&s.posture, &s.posture_last_acc);
+  PBL_LOG_INFO("posture: upright set by hand");
+}
+
+bool habit_service_posture_set_upright(void) {
+  const uint32_t now_s = (uint32_t)(pbl_uptime_ms() / 1000);
+  if (s.posture_last_s == 0 || now_s - s.posture_last_s > POSTURE_UPRIGHT_MAX_AGE_S) {
+    return false;   // no recent reading from the tag
+  }
+  pbl_sys_work_call(prv_posture_upright_kbg, nullptr);
+  return true;
 }
 
 void habit_service_posture_forget(void) {

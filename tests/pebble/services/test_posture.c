@@ -134,6 +134,24 @@ void test_posture__minute_summary_and_forget(void) {
   cl_assert(!s_d.calibrated);
 }
 
+void test_posture__set_reference_now(void) {
+  PostureConfig cfg;
+  posture_default_config(&cfg);
+  posture_init(&s_d, &cfg);
+  s_t = 1000;
+  // never walked: not judged, no alerts
+  cl_assert_equal_i(prv_run(40, 120, 5, false), 0);
+  cl_assert(!s_d.calibrated);
+  // "upright now" while leaning 30 degrees: that becomes upright, so 30 isn't slouched and 30 + 40 is
+  const HabitVec now = prv_tilt(30);
+  posture_set_reference(&s_d, &now);
+  cl_assert(s_d.calibrated);
+  cl_assert_equal_i(prv_run(30, 120, 5, false), 0);
+  cl_assert_equal_i(s_d.state, PostureState_Upright);
+  cl_assert(prv_run(70, 120, 5, false) >= 1);
+  cl_assert_equal_i(s_d.state, PostureState_Slouched);
+}
+
 // ---- scan scheduling ---------------------------------------------------------------------------
 
 static PostureScanner s_sc;

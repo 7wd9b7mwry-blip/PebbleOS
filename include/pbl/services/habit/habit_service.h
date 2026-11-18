@@ -113,6 +113,8 @@ void habit_service_set_posture(bool on);
 void habit_service_posture_pair(void);
 void habit_service_posture_set_tag(const uint8_t mac_msb_first[6]);
 void habit_service_posture_forget(void);
+//! The tag's latest reading (within 90 s) becomes upright now; false: no recent reading.
+bool habit_service_posture_set_upright(void);
 //! Forget the calibrated regions (back to the generic "hand at the head" default).
 void habit_service_reset_calibration(void);
 
