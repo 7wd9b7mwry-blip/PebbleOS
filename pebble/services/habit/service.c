@@ -73,7 +73,7 @@ PBL_LOG_MODULE_DEFINE(service_habit, CONFIG_SERVICE_HABIT_LOG_LEVEL);
 #define SOUND_FRAME_SAMPLES 320   // 20 ms at 16 kHz
 #define SOUND_FRAMES 50           // one second a minute
 #define SOUND_SKIP_FRAMES 10      // the first 200 ms after the mic starts: its start-up, not the room
-#define POSTURE_PERIOD_MS 3000    // the scan timer; bursts every 3 s while the tag is worn (a nudge within ~6-9 s) ...
+#define POSTURE_PERIOD_MS 1000    // the scan timer; a burst every second while the tag is worn (as responsive as it gets) ...
 #define POSTURE_BURST_MS 600      // ... long enough for one of the E8's advertisements (every 0.5 s)
 #define POSTURE_PAIR_MIN_RSSI -65 // pairing: the tag must be right next to the watch
 #define POSTURE_UPRIGHT_MAX_AGE_S 90  // "upright now" needs a tag reading this recent
@@ -165,6 +165,8 @@ static struct {
   bool posture_on;
   bool posture_pairing;
   uint8_t posture_tag[6];   // as on air (least significant byte first); all 0: none
+  HabitVec posture_up;       // the upright set by hand, saved (posture_up_set): restored at the first reading
+  bool posture_up_set;
   PostureDetector posture;
   PostureScanner scanner;
   bool walking;
@@ -221,6 +223,7 @@ static const char KEY_MODEL[] = "model";
 static const char KEY_POSTURE[] = "posture";
 static const char KEY_POSTURE_TAG[] = "posture_tag";
 static const char KEY_POSTURE_TAG_V[] = "posture_tag_v";
+static const char KEY_POSTURE_UP[] = "posture_up";   // the upright set by hand (HabitVec), kept across restarts
 #define POSTURE_TAG_VERSION 2   // 2: the E8 on the back (2026-11-18) replaces whatever tag was saved before
 static const char KEY_HOLDOUT[] = "holdout";
 static const char KEY_HOME_KEY[] = "home_key";
@@ -299,6 +302,8 @@ static void prv_load_settings(void) {
     s.posture_on = v != 0;
   }
   prv_settings_get(KEY_POSTURE_TAG, s.posture_tag, sizeof(s.posture_tag));
+  s.posture_up_set = prv_settings_get(KEY_POSTURE_UP, &s.posture_up, sizeof(s.posture_up)) &&
+                     (s.posture_up.x || s.posture_up.y || s.posture_up.z);
 #ifdef POSTURE_TAG_DEFAULT
   {  // nothing paired or set: the build's default tag (home_key.h)
     static const uint8_t zero[6] = {0};
@@ -312,6 +317,9 @@ static void prv_load_settings(void) {
       prv_settings_set(KEY_POSTURE_TAG, s.posture_tag, sizeof(s.posture_tag));
       ver = POSTURE_TAG_VERSION;
       prv_settings_set(KEY_POSTURE_TAG_V, &ver, 1);
+      s.posture_up_set = false;   // the old tag's upright
+      const HabitVec none = {0};
+      prv_settings_set(KEY_POSTURE_UP, &none, sizeof(none));
     } else if (memcmp(s.posture_tag, zero, sizeof(zero)) == 0) {
       memcpy(s.posture_tag, def, sizeof(def));
     }
@@ -629,6 +637,9 @@ static void prv_posture_burst_kbg(void *unused) {
   // walking teaches the upright reference only with the card moving too (worn): a card left lying while I walk
   // (2026-11-18) taught the table's angle, so worn it read ~100 degrees off and never nudged
   const bool worn_walk = s.walking && now_s - s.scanner.still_since_s < POSTURE_LEARN_MOVED_S;
+  if (s.posture_up_set && !s.posture.calibrated) {   // after a restart: the upright set by hand before
+    posture_set_reference(&s.posture, &s.posture_up);
+  }
   if (posture_feed(&s.posture, now_s, &avg, worn_walk) && !s.playing &&
       !vibe_pattern_is_owned_by(VibePatternOwner_Habit)) {
     s.posture_alerts++;
@@ -1237,6 +1248,7 @@ void habit_service_init(void) {
   PostureScanConfig sccfg;
   posture_scan_default_config(&sccfg);
   sccfg.period_s = POSTURE_PERIOD_MS / 1000;
+  sccfg.lost_after = 10;   // a burst a second can miss the tag now and then: lost (once a minute) after 10 s unheard
   posture_scan_init(&s.scanner, &sccfg);
   s.sound_rms_db10 = s.sound_peak_db10 = SOUND_LEVEL_FLOOR_DB10;
 }
@@ -1559,12 +1571,23 @@ void habit_service_posture_set_tag(const uint8_t mac_msb_first[6]) {
   pbl_sys_work_call(prv_posture_set_tag_kbg, nullptr);
 }
 
+static void prv_posture_up_save(const HabitVec *up) {
+  const HabitVec none = {0};
+  s.posture_up_set = up != NULL;
+  if (up) {
+    s.posture_up = *up;
+  }
+  prv_settings_set(KEY_POSTURE_UP, up ? up : &none, sizeof(none));
+}
+
 static void prv_posture_forget_kbg(void *unused) {
   posture_forget_reference(&s.posture);
+  prv_posture_up_save(NULL);
 }
 
 static void prv_posture_upright_kbg(void *unused) {
   posture_set_reference(&s.posture, &s.posture_last_acc);
+  prv_posture_up_save(&s.posture_last_acc);
   PBL_LOG_INFO("posture: upright set by hand");
 }
 
