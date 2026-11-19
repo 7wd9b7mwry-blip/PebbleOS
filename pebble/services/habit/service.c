@@ -898,9 +898,11 @@ static bool prv_play(VibeProgramId program, uint32_t max_ms, AirSource source, u
   }
   // the wave programs at the motor's full range (their own strengths are the design); the alerts and nudges follow
   // the wearer's intensity setting
-  const bool wave = p->loops || program >= VibeProgram_LabFirst;
-  // the wave programs and the posture nudge at the full range; the habit alerts follow the intensity setting
-  const int32_t scale = (wave || program == VibeProgram_Posture) ? 100 : vibes_get_default_vibe_strength();
+  const bool wave = p->loops || (program >= VibeProgram_LabFirst && program < VibeProgram_LabEnd);
+  // the wave programs, the posture nudge and the chore buzz at the full range; the habit alerts follow the intensity
+  // setting
+  const int32_t scale = (wave || program == VibeProgram_Posture || program == VibeProgram_Chore)
+                            ? 100 : vibes_get_default_vibe_strength();
   if (program == VibeProgram_LabHeart) {   // 80 % of my heart rate (60 bpm without one)
     vibe_program_set_heart_bpm((uint8_t)(s.bpm ? s.bpm * 4 / 5 : 60));
   }
@@ -1364,6 +1366,25 @@ bool habit_service_play_from(VibeProgramId program, uint32_t max_ms, uint8_t sou
   s_play_args = (PlayArgs){program, max_ms, source, trial};
   pbl_sys_work_call(prv_play_kbg, nullptr);
   return true;
+}
+
+// the chore buzz waits out the notification's own vibe (a notification preempts our patterns)
+#define CHORE_BUZZ_DELAY_MS 1500
+
+static void prv_chore_work(struct pbl_work *work) {
+  if (s.running) {
+    prv_play(VibeProgram_Chore, 0, AirSource_Chore, 0);
+  }
+}
+
+static PBL_DELAYED_WORK_DEFINE(s_chore_work, prv_chore_work);
+
+static void prv_chore_kbg(void *unused) {
+  pbl_delayed_work_reschedule(&pbl_sys_workq, &s_chore_work, PBL_MSEC(CHORE_BUZZ_DELAY_MS));
+}
+
+void habit_service_chore_buzz(void) {
+  pbl_sys_work_call(prv_chore_kbg, nullptr);
 }
 
 bool habit_service_play(VibeProgramId program, uint32_t max_ms) {

@@ -38,6 +38,8 @@ typedef enum {
   VibeProgram_LabCoherent,  //!< 5.5 s in, 5.5 s out
   VibeProgram_LabRocking,   //!< a soft 4 s rise and fall (rocking, about 0.25 Hz), for falling asleep
   VibeProgram_LabCalmGap,   //!< calm with a moment of silence between waves
+  VibeProgram_LabEnd,       //!< (after the lab's programs)
+  VibeProgram_Chore = VibeProgram_LabEnd,  //!< a chore nudge from Home Assistant: two long firm swells (a doorbell)
   VibeProgramCount,
 } VibeProgramId;
 

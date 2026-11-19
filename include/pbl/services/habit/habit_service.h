@@ -84,6 +84,9 @@ void habit_service_set_quiet(uint32_t minutes);
 //! "vibe <program> <minutes> trial": an experiment vibe (a share held out), "holdout <pct>" sets that share.
 void habit_service_command(const char *cmd);
 
+//! A chore notification arrived (Home Assistant, title "Chore..."): the chore buzz, after the notification's own vibe.
+void habit_service_chore_buzz(void);
+
 //! Calibration: the hand is at `region` now; store the current forearm direction.
 void habit_service_calibrate(HabitRegion region);
 

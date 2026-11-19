@@ -72,6 +72,11 @@ static const VibeRamp s_posture[] = {
     {150, 40, 100}, {120, 0, 0}, {150, 40, 100}, {120, 0, 0}, {220, 50, 100},
 };
 
+// a chore to do now: two long firm swells, a doorbell (unlike the taps, the posture pulses and the waves), full range
+static const VibeRamp s_chore[] = {
+    {250, 50, 100}, {350, 100, 100}, {200, 0, 0}, {250, 50, 100}, {500, 100, 100},
+};
+
 static const VibeProgram s_programs[VibeProgramCount] = {
     [VibeProgram_Calm] = {"calm", s_calm, ARRAY_LEN(s_calm), true},
     [VibeProgram_Sleep] = {"sleep", s_sleep, ARRAY_LEN(s_sleep), true},
@@ -89,6 +94,7 @@ static const VibeProgram s_programs[VibeProgramCount] = {
     [VibeProgram_LabCoherent] = {"lab_coherent", s_lab_coherent, ARRAY_LEN(s_lab_coherent), true},
     [VibeProgram_LabRocking] = {"lab_rocking", s_lab_rocking, ARRAY_LEN(s_lab_rocking), true},
     [VibeProgram_LabCalmGap] = {"lab_calm_gap", s_lab_calm_gap, ARRAY_LEN(s_lab_calm_gap), true},
+    [VibeProgram_Chore] = {"chore", s_chore, ARRAY_LEN(s_chore), false},
 };
 
 const VibeProgram *vibe_program_get(VibeProgramId id) {

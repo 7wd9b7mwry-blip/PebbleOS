@@ -48,6 +48,7 @@ typedef enum {
   AirSource_Command = 4,  //!< Home Assistant ("PDB vibe ...")
   AirSource_Posture = 5,
   AirSource_Console = 6,
+  AirSource_Chore = 7,    //!< a chore notification from Home Assistant (title "Chore...")
 } AirSource;
 
 typedef enum {

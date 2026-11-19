@@ -327,6 +327,16 @@ static bool prv_handle_habit_command(const ANCSAttribute *app_id, const ANCSAttr
   }
   return true;
 }
+
+// a chore nudge from Home Assistant (title "Chore", "Chore, still to do", "Chore: put it down (...)"): shown even
+// when the phone sent it silently, with the chore buzz
+static bool prv_is_chore(const ANCSAttribute *app_id, const ANCSAttribute *title) {
+  static const char prefix[] = "Chore";
+  const size_t plen = sizeof(prefix) - 1;
+  const size_t alen = strlen(HABIT_COMMAND_APP_ID);
+  return title && title->length >= plen && memcmp(title->value, prefix, plen) == 0 &&
+         app_id->length == alen && memcmp(app_id->value, HABIT_COMMAND_APP_ID, alen) == 0;
+}
 #endif
 
 void ancs_notifications_handle_message(uint32_t uid, ANCSProperty properties,
@@ -364,6 +374,7 @@ void ancs_notifications_handle_message(uint32_t uid, ANCSProperty properties,
   if (prv_handle_habit_command(app_id, title, is_recovered)) {
     goto cleanup;
   }
+  const bool chore = !is_recovered && prv_is_chore(app_id, title);
 #endif
   if (is_recovered) {
     const bool has_valid_date = date && (ancs_notifications_util_parse_timestamp(date) != 0);
@@ -405,6 +416,12 @@ void ancs_notifications_handle_message(uint32_t uid, ANCSProperty properties,
   notification->header.layout = LayoutIdNotification;
   notification->header.ancs_notif = true;
   notification->header.silent = ((properties & ANCSProperty_Silent) != 0);
+#ifdef CONFIG_SERVICE_HABIT
+  if (chore) {
+    // a chore nudge without a sound (so as not to ring the phone) reaches us "silenced on the phone", which isn't shown
+    notification->header.silent = false;
+  }
+#endif
 
   notification_storage_lock();
   // filter out duplicate notifications
@@ -423,6 +440,11 @@ void ancs_notifications_handle_message(uint32_t uid, ANCSProperty properties,
     PBL_LOG_DBG("New ANCS notification: %" PRIu32 " (recovered=%d, alert=%d)", uid, is_recovered,
                 alert);
     prv_handle_new_ancs_notif(notification, alert);
+#ifdef CONFIG_SERVICE_HABIT
+    if (chore && alert) {
+      habit_service_chore_buzz();
+    }
+#endif
   }
 
   notification_storage_unlock();

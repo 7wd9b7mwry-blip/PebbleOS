@@ -253,7 +253,7 @@ void test_habit_vibes__lab_heartbeat_follows_the_tempo(void) {
   cl_assert_equal_i(vibe_program_length_ms(p), 666);
   vibe_program_set_heart_bpm(10);                      // clamped to 40
   cl_assert_equal_i(vibe_program_length_ms(p), 1500);
-  for (int id = VibeProgram_LabFirst; id < VibeProgramCount; id++) {
+  for (int id = VibeProgram_LabFirst; id < VibeProgram_LabEnd; id++) {
     cl_assert(vibe_program_get((VibeProgramId)id) != NULL);
     cl_assert(vibe_program_get((VibeProgramId)id)->loops || id == VibeProgram_LabSlowing);
   }
